@@ -1,39 +1,14 @@
 # claude-code-hosted
 
-Web panel para sesiones headless de Claude Code corriendo en una VPS.
+Panel web para sesiones headless de Claude Code corriendo en un VPS (Ubuntu
+24.04, Traefik + Postgres + Redis + Django ASGI + workers systemd con el
+Claude Agent SDK). Ver `PLAN.md` para la arquitectura y las fases.
 
-Construido sobre la plantilla `plantilla-django-react` (cookiecutter-django +
-Vite/React). Ver `PLAN.md` para la hoja de ruta completa del proyecto y
-`AGENTS.md` para orientacion a agentes.
+`legacy/` contiene el scaffold inicial (cookiecutter-django + Vite/React vía
+Dokploy) generado antes de arrancar el PLAN.md — se conserva solo como
+referencia, no se despliega.
 
-## Requisitos
+## Estado
 
-- Docker + Docker Compose v2
-- `just` (https://github.com/casey/just)
-- `uv` (https://docs.astral.sh/uv/)
-- `pnpm` (frontend)
-
-## Levantar en local
-
-```bash
-just build                    # docker compose build
-just up                       # django, postgres, pgbouncer, redis, celery*, flower, frontend
-```
-
-Frontend en http://localhost:5173 y backend en http://localhost:8000.
-
-## Comandos utiles
-
-```bash
-just manage +args             # docker compose run --rm django python manage.py <args>
-just manage-direct-db createsuperuser
-just pytest +args
-just logs celeryworker
-just down
-```
-
-## Documentacion
-
-- `PLAN.md` — fases del proyecto, gates de validacion.
-- `AGENTS.md` — guia para agentes (estructura, comandos, cosas que rompen silenciosamente).
-- `START.md` — guia de rename a partir de la plantilla base (conservada por referencia).
+En construcción, Fase 0 (`PLAN.md` §5). Ver `PROGRESS.md` y `INFRA.md` una
+vez existan.
