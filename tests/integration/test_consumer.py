@@ -54,9 +54,14 @@ async def test_rejects_unauthenticated():
     comm = WebsocketCommunicator(SessionConsumer.as_asgi(), "/ws/session/x")
     comm.scope["url_route"] = {"kwargs": {"sid": "x"}}
     comm.scope["user"] = AnonymousUser()
-    connected, code = await comm.connect()
-    assert connected is False
-    assert code == 4401
+    # Se acepta y luego se cierra con 4401 (para que el código sea observable
+    # por el cliente, no un rechazo HTTP 403 con code 1006).
+    connected, _ = await comm.connect()
+    assert connected is True
+    out = await comm.receive_output()
+    assert out["type"] == "websocket.close"
+    assert out["code"] == 4401
+    await comm.disconnect()
 
 
 @pytest.mark.django_db(transaction=True)

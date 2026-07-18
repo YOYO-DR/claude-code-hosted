@@ -23,6 +23,11 @@ def make_redis():
 
 class SessionConsumer(AsyncWebsocketConsumer):
     async def connect(self) -> None:
+        # Aceptar primero: un close() antes de accept() se traduce a un rechazo
+        # HTTP 403 y el código 4401 se pierde (el navegador vería 1006). Para
+        # entregar el 4401 observable hay que aceptar y luego cerrar.
+        await self.accept()
+
         user = self.scope.get("user")
         if user is None or not user.is_authenticated:
             await self.close(code=4401)
@@ -38,7 +43,6 @@ class SessionConsumer(AsyncWebsocketConsumer):
         except (TypeError, ValueError):
             last_seq = 0
 
-        await self.accept()
         self._dedup = SeqDedup(last_seq)
         self._redis = make_redis()
         self._pubsub = self._redis.pubsub()
