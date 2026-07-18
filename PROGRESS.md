@@ -268,3 +268,43 @@ todos. Commits `a2d02f1` (renderer/CRUD) + `b7af3db` (privilegios sudo).
 - Proyectos demo: `demo`, `alpha` (MiniMax-M3), `beta` (all-team-models),
   `gamma`. Skills: `global-notes` (global), `alpha-notes` (alpha).
 - MCP dummy de prueba eliminados; sin sesiones colgadas.
+
+---
+
+## Fase 3 — Permisos mixtos + aprobaciones web — GATE CERRADO (2026-07-18)
+
+`can_use_tool` completo (§4.2), resolución idempotente vía SET NX, cola web de
+aprobaciones con badge, rewrite hooks y allow_always. Commits `8a37e8e`,
+`67ff439`, `a797898`.
+
+### Gate 3 — resultados (e2e real contra MiniMax-M3 en el VPS)
+
+| Check | Resultado |
+|-------|-----------|
+| approve → request creado + agente procede | ✅ Write APPROVED.txt: request→allow→`allowed`, archivo creado |
+| deny → mensaje instructivo, acción no ocurre | ✅ Write DENIED.txt: request→deny→`denied`, archivo NO creado |
+| **deny obligatoria corta SIN pasar por el callback** | ✅ probe: `Read(/srv/projects/alpha/…)` denegado NO llega al callback (`read_reached_callback=false`); el Write no-denegado sí (`write_reached_callback=true`); error `denied by your permission settings` |
+| timeout (30s) → deny instructivo + worker desbloqueado | ✅ req→`expired`/timeout, llega result posterior, archivo NO creado |
+| auto + allowlist → sin request | ✅ Write en alpha (bypass): 0 PermissionRequests, archivo creado |
+| carrera de 2 respuestas concurrentes (threads reales) | ✅ unit: exactamente una reclama (SET NX), la otra conflicto |
+| **allow_always Bash(git push \*) → 2da no pregunta** | ✅ regla `Bash(git push *)` de `ctx.suggestions` persistida en DB; misma sesión (updated_permissions destination=session) y sesión nueva (allowed_tools desde DB): 0 requests; push real a remoto bare (commits 5→6→7) |
+| reinicio del worker con request pendiente → expired | ✅ SIGKILL al worker → tras reinicio `expired`/timeout; claim tardío NO resucita (sigue `expired`) |
+| hook dummy reescribe input → agente ejecuta el reescrito | ✅ pide Write ORIGINAL.txt → preview y ejecución = REWRITTEN.txt; ORIGINAL.txt no existe |
+| 55/55 unit tests, ruff + mypy limpios | ✅ |
+
+### Notas de diseño
+
+- El CLI (bundled) **auto-aprueba comandos Bash "seguros"** (p.ej. `echo`) sin
+  consultar el callback; los tests usan `Write`/`git push`/`rm` que sí pasan por
+  aprobación.
+- `allow_always` en la sesión actual usa `PermissionResultAllow(updated_permissions=...)`
+  con `destination="session"`; para futuras sesiones el worker pasa
+  `allowed_tools` desde la DB (fuente de verdad). El re-render de settings.json
+  es best-effort (el worker corre como `agents`, sin sudo al helper).
+- El `can_use_tool` **requiere streaming mode** (ClaudeSDKClient conecta sin
+  prompt y luego `query()`), ya cumplido por el worker.
+
+### Proyectos demo tras Gate 3
+
+- `epsilon` (policy `approve`, timeout 30s) — modo aprobación.
+- Resto (`demo`/`alpha`/`beta`/`gamma`) en `auto` (bypass).

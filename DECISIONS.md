@@ -154,3 +154,36 @@ Verificado en el VPS: deny duro de settings.json bloquea Read a
 `/srv/projects/<otro>` y `~/.ssh` con
 `<tool_use_error>File is in a directory that is denied by your permission
 settings.</tool_use_error>`, incluso bajo `bypassPermissions` (deny > allow).
+
+---
+
+## D8 — Comportamiento del SDK para permisos (Fase 3)
+
+Descubierto empíricamente contra el CLI bundled del `claude_agent_sdk`:
+
+- **`can_use_tool` requiere streaming mode.** Con un prompt string levanta
+  `ValueError`. El worker ya usa `ClaudeSDKClient` (conecta sin prompt y luego
+  `query()`), que es streaming — OK. Al fijar `can_use_tool`, el SDK setea
+  `permission_prompt_tool_name="stdio"` y enruta los permisos al callback.
+- **El CLI auto-aprueba comandos Bash "seguros"** (p.ej. `echo`) sin consultar
+  el callback. Solo acciones no triviales (`Write`, `git push`, `rm`, red…)
+  pasan por `can_use_tool`. Los tests/e2e usan esas.
+- **`permission_mode="default"` + allowlist vacía** ⇒ el callback se consulta
+  para todo lo no-seguro y no denegado. La **deny obligatoria corta ANTES** del
+  callback (verificado: Read a proyecto ajeno → `tool_use_error` sin invocar el
+  callback).
+- **allow_always live**: `PermissionResultAllow(updated_permissions=[...])` con
+  `destination="session"` aplica la regla el resto de la sesión (la 2da
+  invocación no pregunta). Las reglas scopeadas vienen de `ctx.suggestions`
+  (`{tool_name, rule_content}` → `Bash(git push *)`), y **solo existen para
+  comandos estándalone**, no compuestos (`cd && git push` no sugiere regla).
+- **Persistencia entre sesiones**: la regla se guarda en
+  `PermissionPolicy.allowed_tools` (DB, fuente de verdad); el worker la pasa por
+  `ClaudeAgentOptions.allowed_tools` en la próxima sesión. El re-render de
+  settings.json es best-effort: el worker corre como `agents` y no puede sudo el
+  helper de render (sudoers es solo para `panel`); no afecta la correctitud.
+
+Anomalía preexistente (no bloqueante): el `brpop` async del worker loguea
+`Timeout reading from 127.0.0.1:6379` en los polls idle; los mensajes con datos
+vuelven rápido, así que la entrega no se ve afectada. Pendiente de afinar el
+socket/health-check del cliente Redis.
