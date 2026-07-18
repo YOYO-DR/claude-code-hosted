@@ -126,6 +126,10 @@ PANEL_DB_PORT=5432
 PANEL_REDIS_URL=redis://127.0.0.1:6379/0
 PANEL_PROJECTS_ROOT=/srv/projects
 PANEL_AGENTS_HOME=/home/agents
+PANEL_PUBLIC_BASE_URL=https://claude-code-hosted.yoyodr.dev
+# Telegram (Fase 4): rellenar y correr 'manage.py tg_setup'. Vacío = sin Telegram.
+PANEL_TELEGRAM_BOT_TOKEN=
+PANEL_TELEGRAM_USER_IDS=
 EOF
   # root:panel 640: el usuario panel lo lee (migrate/collectstatic manual);
   # los servicios systemd lo leen como root antes de bajar de privilegios.

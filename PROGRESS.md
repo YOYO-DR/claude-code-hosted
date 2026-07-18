@@ -308,3 +308,43 @@ aprobaciones con badge, rewrite hooks y allow_always. Commits `8a37e8e`,
 
 - `epsilon` (policy `approve`, timeout 30s) — modo aprobación.
 - Resto (`demo`/`alpha`/`beta`/`gamma`) en `auto` (bypass).
+
+---
+
+## Fase 4 — Telegram + MCP de puertos — GATE CERRADO (2026-07-18)
+
+MCP de puertos in-process (§4.5) + hook de coordinación, y Telegram completo
+(§4.6): webhook, bridge, topics. Commits `b02b43f`, `32ce7d9`, `61f9a5a`.
+
+### Gate 4 — resultados
+
+| Check | Resultado |
+|-------|-----------|
+| 100 allocate_port concurrentes → cero duplicados | ✅ 80/80 en Postgres (0 dups, 0 err); a 100 hilos también 0 dups (1 fallo = límite max_connections, no lógica) |
+| release de puerto ajeno → rechazado | ✅ unit (solo el proyecto dueño libera) |
+| PG caído durante allocate → error limpio, sin fantasma | ✅ tool MCP envuelve toda excepción → is_error al agente; fila solo si el INSERT/UPDATE tuvo éxito |
+| hook: bind a puerto de otro proyecto → reescribe/deniega | ✅ unit (deny con "usa allocate_port"; rewrite si el proyecto tiene un puerto) |
+| **E2E: dos agentes "en el 8080" a la vez → cero colisiones** | ✅ demo→24140, alpha→21309 vía allocate_port; `ss -tlnp` muestra ambos escuchando sin colisión |
+| webhook: firma inválida → 403 | ✅ live (curl) + unit |
+| webhook: user fuera de allowlist → ignorado | ✅ unit |
+| webhook: doble tap → "ya respondida" | ✅ unit |
+| timeout → edita el mensaje y quita el teclado | ✅ notify_resolved(timeout) edita sin reply_markup (unit); editMessageText 200 en vivo |
+| preview ≤500 y mensaje ≤4096 (input 50KB) | ✅ unit (format_request y send_message truncan) |
+| callback_data ≤64 bytes | ✅ unit (`allow_always:<uuid>` = 49) |
+| topic borrado a mano → 400 → recreado | ✅ unit (400 → createForumTopic → reintento → nuevo id persistido) |
+| **manual (Yoiner): aprobar desde Telegram → se ejecuta** | ✅ tocó Permitir → `BOTON.txt`='tocaste el boton', `resolved_by=telegram`, mensaje editado a Permitido |
+| request llega al topic correcto | ✅ epsilon → su topic; sistema para proyectos sin topic |
+| 79 unit tests, ruff + mypy limpios | ✅ |
+
+### Notas de diseño
+
+- **MCP de puertos in-process** (create_sdk_mcp_server vía
+  `ClaudeAgentOptions.mcp_servers`), NO stdio en .mcp.json: así las creds de
+  Postgres nunca tocan el disco del proyecto (legible por el agente). Cubre las
+  sesiones-worker; el ttyd (escotilla manual) queda fuera de alcance. Ver D9.
+- El hook de puertos vive en `can_use_tool` → solo aplica en modo `approve`. En
+  `auto` (bypass) la coordinación depende de allocate_port + el prompt global.
+- `resolved_by` refleja el origen (web|telegram) codificando `answer|source` en
+  la respuesta de Redis.
+- Telegram: chat_id `-1004460248369`, topic sistema, webhook con secret; token y
+  allowlist en panel.env; `manage.py tg_setup` hace el setup una vez.

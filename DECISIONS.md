@@ -187,3 +187,29 @@ Anomalía preexistente (no bloqueante): el `brpop` async del worker loguea
 `Timeout reading from 127.0.0.1:6379` en los polls idle; los mensajes con datos
 vuelven rápido, así que la entrega no se ve afectada. Pendiente de afinar el
 socket/health-check del cliente Redis.
+
+---
+
+## D9 — MCP de puertos in-process, no stdio (Fase 4)
+
+§4.5 sugiere montar `mcp_ports` como servidor **stdio** en `.mcp.json` con
+`MCP_PROJECT_SLUG` inyectado por el renderer. Problema: un servidor stdio
+necesitaría las **creds de Postgres en el env del .mcp.json**, que vive en el
+directorio del proyecto y es **legible por el agente** (Read no lo deniega) →
+fuga de la DB, viola "sin secretos a disco" (§4.3/§6).
+
+Decisión: montar el MCP de puertos **in-process** con
+`create_sdk_mcp_server(...)` pasado por `ClaudeAgentOptions.mcp_servers` desde el
+worker. El worker ya tiene Django+DB en memoria; el slug es de confianza (lo fija
+el worker, no el agente). Cero secretos a disco.
+
+Trade-off: cubre las **sesiones-worker** (las que orquesta el panel, que son las
+del gate E2E). La **escotilla ttyd** (uso manual del operador) NO obtiene el MCP
+de puertos. Si en el futuro se quisiera, la vía correcta sería un servidor stdio
+que llame a un endpoint localhost del panel (sin creds a disco), no inyectar la
+DB en el .mcp.json.
+
+El **hook de coordinación de puertos** vive en `can_use_tool` (§4.2 task 4) →
+solo se consulta en modo `approve`. En `auto` (bypassPermissions) el SDK no llama
+al callback, así que la coordinación depende de `allocate_port` + el prompt
+global. Es coherente con "auto = confío en este proyecto".
