@@ -28,7 +28,7 @@ django.setup()
 
 # -- Project information -----------------------------------------------------
 
-project = "plantilla django react"
+project = "Claude Code Hosted"
 copyright = """2026, Yoiner Duran Rios"""  # noqa: A001
 author = "Yoiner Duran Rios"
 

@@ -2,7 +2,7 @@
 
 ## Repo identity
 
-This is a **starter template** (cookiecutter-django backend + Vite/React frontend), not a finished app. The default project name is `plantilla-django-react`. Before adding real features on top of a fresh clone, read **`START.md`** — it documents the mandatory find-and-replace + manual renames (kebab / snake / Title variants of the project name, Docker volume names, Celery app name, domain in `backend/.envs/.production/.django`, `DJANGO_SECRET_KEY`, `POSTGRES_PASSWORD`, etc.). Skipping it leaves stale references everywhere (compose volume names, `pyproject.toml` name, celery app label, swagger title, etc.).
+This is a **starter template** (cookiecutter-django backend + Vite/React frontend), not a finished app. The default project name is `claude-code-hosted`. Before adding real features on top of a fresh clone, read **`START.md`** — it documents the mandatory find-and-replace + manual renames (kebab / snake / Title variants of the project name, Docker volume names, Celery app name, domain in `backend/.envs/.production/.django`, `DJANGO_SECRET_KEY`, `POSTGRES_PASSWORD`, etc.). Skipping it leaves stale references everywhere (compose volume names, `pyproject.toml` name, celery app label, swagger title, etc.).
 
 The `planes/` and `.serena/` directories are local-only scratch space and can be deleted.
 
@@ -58,7 +58,7 @@ pnpm lint         # eslint .
 
 ## Things that will silently break if you miss them
 
-- **Celery app label** is `config.celery_app` (set in `backend/config/celery_app.py` via `Celery("plantilla_django_react")` — the constructor string is the *broker label* and must be renamed alongside the project, otherwise Flower/log lines look wrong). Always invoke celery as `celery -A config.celery_app ...` (start scripts in `backend/compose/.../celery/*/start` already do this).
+- **Celery app label** is `config.celery_app` (set in `backend/config/celery_app.py` via `Celery("claude_code_hosted")` — the constructor string is the *broker label* and must be renamed alongside the project, otherwise Flower/log lines look wrong). Always invoke celery as `celery -A config.celery_app ...` (start scripts in `backend/compose/.../celery/*/start` already do this).
 - **Adding a new app**: `cd backend && python manage.py startapp mi_app` (or `docker compose run --rm django python manage.py startapp mi_app`), put it under `apps/`, then add `"apps.mi_app"` to `LOCAL_APPS` in `backend/config/settings/base.py`. `manage.py` already appends `apps/` to `sys.path`, so imports inside app code are `from apps.<app>.models import …` and tests/factories follow the same `apps.<app>.tests.…` style.
 - **Test settings**: pytest is pinned to `--ds=config.settings.test --reuse-db --import-mode=importlib` in `pyproject.toml` `[tool.pytest]`. Do not pass `--ds=` on the CLI; it will conflict. Test file patterns are `tests.py` and `test_*.py`.
 - **Coverage** (`tool.coverage.run`): only `apps/**` is included. `config/`, `migrations/`, and `*/tests/*` are excluded. Adding code under `config/` won't move the coverage needle — that's by design.

@@ -1,6 +1,6 @@
 // For format details, see https://containers.dev/implementors/json_reference/
 {
-    "name": "plantilla_django_react_dev",
+    "name": "claude_code_hosted_dev",
     "dockerComposeFile": [
         "../docker-compose.local.yml"
     ],

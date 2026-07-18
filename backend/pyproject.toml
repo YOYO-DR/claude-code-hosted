@@ -1,7 +1,7 @@
 [project]
-name = "plantilla_django_react"
+name = "claude_code_hosted"
 version = "0.1.0"
-description = "Proyecto plantilla para django rest y react vite"
+description = "Claude Code Hosted — web panel for headless Claude Code sessions"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [

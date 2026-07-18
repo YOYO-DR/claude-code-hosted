@@ -275,13 +275,8 @@ apps/media/
 .ipython/
 .env
 
-# PLANTILLA BASE: las variables de entorno de `.envs/` estan COMENTADAS
-# a proposito para que se COMMITEEN al repo base (asi un dev que clona
-# la plantilla ve que vars hay que definir y con que valores por defecto).
-#
-# EN UN PROYECTO REAL: descomenta las 2 lineas siguientes para que los
-# `.envs/` sensibles (DJANGO_SECRET_KEY, POSTGRES_PASSWORD, etc.) NO se
-# suban al repo. El `.envs/.local/` queda permitido por el `!` para que
-# los devs puedan trackear sus overrides locales si quieren.
-# .envs/*
-# !.envs/.local/
+# En proyecto real: bloquear el commit de `.envs/` sensibles (DJANGO_SECRET_KEY,
+# POSTGRES_PASSWORD, RESEND_API_KEY, etc.). `.envs/.local/` queda permitido para
+# overrides locales trackeables.
+.envs/*
+!.envs/.local/

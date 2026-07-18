@@ -11,7 +11,7 @@ from .base import env
 # https://docs.djangoproject.com/en/dev/ref/settings/#secret-key
 SECRET_KEY = env("DJANGO_SECRET_KEY")
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
-ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["plantilla.yoyodr.dev"])
+ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["claude-code-hosted.yoyodr.dev"])
 
 # DATABASES
 # ------------------------------------------------------------------------------
@@ -82,14 +82,14 @@ MEDIA_URL = "/api/media/"
 # https://docs.djangoproject.com/en/dev/ref/settings/#default-from-email
 DEFAULT_FROM_EMAIL = env(
     "DJANGO_DEFAULT_FROM_EMAIL",
-    default="plantilla django react <noreply@plantilla.yoyodr.dev>",
+    default="Claude Code Hosted <noreply@claude-code-hosted.yoyodr.dev>",
 )
 # https://docs.djangoproject.com/en/dev/ref/settings/#server-email
 SERVER_EMAIL = env("DJANGO_SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
 # https://docs.djangoproject.com/en/dev/ref/settings/#email-subject-prefix
 EMAIL_SUBJECT_PREFIX = env(
     "DJANGO_EMAIL_SUBJECT_PREFIX",
-    default="[plantilla django react] ",
+    default="[Claude Code Hosted] ",
 )
 ACCOUNT_EMAIL_SUBJECT_PREFIX = EMAIL_SUBJECT_PREFIX
 
@@ -113,7 +113,7 @@ ANYMAIL = {}
 # -------------------------------------------------------------------------------
 # Tools that generate code samples can use SERVERS to point to the correct domain
 SPECTACULAR_SETTINGS["SERVERS"] = [
-    {"url": "https://plantilla.yoyodr.dev", "description": "Production server"},
+    {"url": "https://claude-code-hosted.yoyodr.dev", "description": "Production server"},
 ]
 # Your stuff...
 # ------------------------------------------------------------------------------

@@ -11,7 +11,7 @@ services:
     build:
       context: .
       dockerfile: ./compose/production/django/Dockerfile
-    image: plantilla_django_react_production_django
+    image: claude_code_hosted_production_django
     volumes:
       - production_django_media:/app/apps/media
       - production_django_logs:/app/logs
@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: ./compose/production/postgres/Dockerfile
-    image: plantilla_django_react_production_postgres
+    image: claude_code_hosted_production_postgres
     volumes:
       - production_postgres_data:/var/lib/postgresql/18/docker
       - production_postgres_data_backups:/backups
@@ -38,7 +38,7 @@ services:
     build:
       context: .
       dockerfile: ./compose/production/pgbouncer/Dockerfile
-    image: plantilla_django_react_production_pgbouncer
+    image: claude_code_hosted_production_pgbouncer
     restart: unless-stopped
     depends_on:
       - postgres
@@ -49,7 +49,7 @@ services:
     build:
       context: .
       dockerfile: ./compose/production/traefik/Dockerfile
-    image: plantilla_django_react_production_traefik
+    image: claude_code_hosted_production_traefik
     depends_on:
       - django
     volumes:
@@ -62,7 +62,7 @@ services:
 
   celeryworker:
     <<: *django
-    image: plantilla_django_react_production_celeryworker
+    image: claude_code_hosted_production_celeryworker
     depends_on:
       - pgbouncer
       - redis
@@ -70,7 +70,7 @@ services:
 
   celerybeat:
     <<: *django
-    image: plantilla_django_react_production_celerybeat
+    image: claude_code_hosted_production_celerybeat
     depends_on:
       - pgbouncer
       - redis
@@ -78,7 +78,7 @@ services:
 
   flower:
     <<: *django
-    image: plantilla_django_react_production_flower
+    image: claude_code_hosted_production_flower
     depends_on:
       - celeryworker
     command: /start-flower
@@ -87,7 +87,7 @@ services:
     build:
       context: .
       dockerfile: ./compose/production/nginx/Dockerfile
-    image: plantilla_django_react_production_nginx
+    image: claude_code_hosted_production_nginx
     depends_on:
       - django
     volumes:
@@ -99,7 +99,7 @@ services:
       dockerfile: ./compose/production/Dockerfile
       args:
         - VITE_API_URL=${VITE_API_URL}
-    image: plantilla_django_react_production_frontend
+    image: claude_code_hosted_production_frontend
     depends_on:
       - django
     restart: unless-stopped

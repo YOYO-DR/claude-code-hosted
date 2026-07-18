@@ -1,9 +1,9 @@
-.. plantilla django react documentation master file, created by
+.. Claude Code Hosted documentation master file, created by
    sphinx-quickstart.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to plantilla django react's documentation!
+Welcome to Claude Code Hosted's documentation!
 ======================================================================
 
 .. toctree::

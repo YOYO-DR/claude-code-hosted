@@ -1,7 +1,7 @@
 services:
   docs:
-    image: plantilla_django_react_local_docs
-    container_name: plantilla_django_react_local_docs
+    image: claude_code_hosted_local_docs
+    container_name: claude_code_hosted_local_docs
     build:
       context: .
       dockerfile: ./compose/local/docs/Dockerfile

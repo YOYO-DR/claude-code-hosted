@@ -1,1 +1,3 @@
 vps.env
+.playwright-mcp/
+.env

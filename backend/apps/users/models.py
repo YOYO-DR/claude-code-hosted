@@ -12,7 +12,7 @@ from .managers import UserManager
 
 class User(AbstractUser):
     """
-    Default custom user model for plantilla django react.
+    Default custom user model for Claude Code Hosted.
     If adding fields that need to be filled at user signup,
     check forms.SignupForm and forms.SocialSignupForms accordingly.
     """

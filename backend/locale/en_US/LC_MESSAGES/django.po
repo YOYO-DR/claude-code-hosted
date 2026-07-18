@@ -1,4 +1,4 @@
-# Translations for the plantilla django react project
+# Translations for the Claude Code Hosted project
 # Copyright (C) 2026 Yoiner Duran Rios
 # Yoiner Duran Rios <yoiner3216898182@gmail.com>, 2026.
 #

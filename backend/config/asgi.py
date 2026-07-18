@@ -1,5 +1,5 @@
 """
-ASGI config for plantilla django react project.
+ASGI config for Claude Code Hosted project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 

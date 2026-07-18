@@ -55,19 +55,19 @@ http:
     django:
       loadBalancer:
         servers:
-          - url: http://django_plantilla:5000
+          - url: http://django_claude_code_hosted:5000
 
     # Servicio Nginx (archivos media)
     django-media:
       loadBalancer:
         servers:
-          - url: http://nginx_plantilla:80
+          - url: http://nginx_claude_code_hosted:80
 
     # Servicio Frontend
     frontend:
       loadBalancer:
         servers:
-          - url: http://frontend_plantilla:80
+          - url: http://frontend_claude_code_hosted:80
 
 # Configuración del provider file
 providers:

@@ -2,9 +2,9 @@
 # ------------------------------------------------------------------------------
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
-POSTGRES_DB=plantilla_django_react
-POSTGRES_USER=debug
-POSTGRES_PASSWORD=debug
+POSTGRES_DB=claude_code_hosted
+POSTGRES_USER=claude_code_hosted
+POSTGRES_PASSWORD=GQ8owmvnuyOngqgjcrDzSf2-7W-zrIIa
 
 # pgbouncer
 # ------------------------------------------------------------------------------

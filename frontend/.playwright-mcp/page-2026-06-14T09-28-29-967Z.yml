@@ -1,8 +1,0 @@
-- main [ref=e12]:
-  - heading "CORS OK — SimpleJWT funcionando" [level=1] [ref=e13]
-  - paragraph [ref=e14]:
-    - text: Bienvenido
-    - strong [ref=e15]: ...
-  - group [ref=e16]:
-    - generic "Datos de /api/users/me/ (válida CORS + Authorization)" [ref=e17]
-  - button "Cerrar sesión" [ref=e18]

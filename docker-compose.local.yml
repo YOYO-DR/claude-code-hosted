@@ -1,15 +1,15 @@
 volumes:
-  plantilla_django_react_local_postgres_data: {}
-  plantilla_django_react_local_postgres_data_backups: {}
-  plantilla_django_react_local_redis_data: {}
+  claude_code_hosted_local_postgres_data: {}
+  claude_code_hosted_local_postgres_data_backups: {}
+  claude_code_hosted_local_redis_data: {}
 
 services:
   django: &django
     build:
       context: ./backend
       dockerfile: ./compose/local/django/Dockerfile
-    image: plantilla_django_react_local_django
-    container_name: plantilla_django_react_local_django
+    image: claude_code_hosted_local_django
+    container_name: claude_code_hosted_local_django
     depends_on:
       - pgbouncer
       - redis
@@ -27,11 +27,11 @@ services:
     build:
       context: ./backend
       dockerfile: ./compose/production/postgres/Dockerfile
-    image: plantilla_django_react_production_postgres
-    container_name: plantilla_django_react_local_postgres
+    image: claude_code_hosted_production_postgres
+    container_name: claude_code_hosted_local_postgres
     volumes:
-      - plantilla_django_react_local_postgres_data:/var/lib/postgresql/18/docker
-      - plantilla_django_react_local_postgres_data_backups:/backups
+      - claude_code_hosted_local_postgres_data:/var/lib/postgresql/18/docker
+      - claude_code_hosted_local_postgres_data_backups:/backups
     env_file:
       - ./backend/.envs/.local/.postgres
 
@@ -39,8 +39,8 @@ services:
     build:
       context: ./backend
       dockerfile: ./compose/production/pgbouncer/Dockerfile
-    image: plantilla_django_react_local_pgbouncer
-    container_name: plantilla_django_react_local_pgbouncer
+    image: claude_code_hosted_local_pgbouncer
+    container_name: claude_code_hosted_local_pgbouncer
     restart: unless-stopped
     depends_on:
       - postgres
@@ -51,14 +51,14 @@ services:
 
   redis:
     image: docker.io/redis:7.2
-    container_name: plantilla_django_react_local_redis
+    container_name: claude_code_hosted_local_redis
     volumes:
-      - plantilla_django_react_local_redis_data:/data
+      - claude_code_hosted_local_redis_data:/data
 
   celeryworker:
     <<: *django
-    image: plantilla_django_react_local_celeryworker
-    container_name: plantilla_django_react_local_celeryworker
+    image: claude_code_hosted_local_celeryworker
+    container_name: claude_code_hosted_local_celeryworker
     depends_on:
       - pgbouncer
       - redis
@@ -67,8 +67,8 @@ services:
 
   celerybeat:
     <<: *django
-    image: plantilla_django_react_local_celerybeat
-    container_name: plantilla_django_react_local_celerybeat
+    image: claude_code_hosted_local_celerybeat
+    container_name: claude_code_hosted_local_celerybeat
     depends_on:
       - pgbouncer
       - redis
@@ -77,8 +77,8 @@ services:
 
   flower:
     <<: *django
-    image: plantilla_django_react_local_flower
-    container_name: plantilla_django_react_local_flower
+    image: claude_code_hosted_local_flower
+    container_name: claude_code_hosted_local_flower
     depends_on:
       - pgbouncer
       - redis
@@ -90,8 +90,8 @@ services:
     build:
       context: ./frontend
       dockerfile: ./compose/local/Dockerfile
-    image: plantilla_django_react_local_frontend
-    container_name: plantilla_django_react_local_frontend
+    image: claude_code_hosted_local_frontend
+    container_name: claude_code_hosted_local_frontend
     volumes:
       - ./frontend:/app
       - /app/node_modules

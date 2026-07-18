@@ -1,6 +1,6 @@
-# START.md — Guía para renombrar plantilla-django-react
+# START.md — Guía para renombrar claude-code-hosted
 
-Esta guía te ayuda a renombrar `plantilla-django-react` a tu nuevo proyecto en **5-10 minutos**.
+Esta guía te ayuda a renombrar `claude-code-hosted` a tu nuevo proyecto en **5-10 minutos**.
 
 ---
 
@@ -31,8 +31,8 @@ find . -type f \
   -not -path './.serena/*' \
   -not -path './.opencode/*' \
   -not -path './.claude/*' \
-  -exec sed -i 's/plantilla-django-react/mi-proyecto/g' {} \; \
-  -exec sed -i 's/plantilla_django_react/mi_proyecto/g' {} \;
+  -exec sed -i 's/claude-code-hosted/mi-proyecto/g' {} \; \
+  -exec sed -i 's/claude_code_hosted/mi_proyecto/g' {} \;
 ```
 
 ---
@@ -42,7 +42,7 @@ find . -type f \
 ### 2.1 Mover directorio de la app Django
 
 ```bash
-mv backend/plantilla_django_react backend/mi_proyecto
+mv backend/claude_code_hosted backend/mi_proyecto
 ```
 
 ### 2.2 Verificar `pyproject.toml`
@@ -56,15 +56,15 @@ En `backend/config/celery_app.py`, verifica que el nombre del broker sea correct
 ### 2.4 Volúmenes Docker
 
 En los 3 archivos `docker-compose.*.yml`, verifica que los nombres de volumenes se actualizaron:
-- `plantilla_django_react_local_*` → `mi_proyecto_local_*`
+- `claude_code_hosted_local_*` → `mi_proyecto_local_*`
 - `production_django_*` → `mi_proyecto_django_*`
 
 ### 2.5 Dominio
 
 En `backend/.envs/.production/.django`, cambia:
-- `DJANGO_ALLOWED_HOSTS=.plantilla.yoyodr.dev` → `.mi-dominio.com`
-- `DJANGO_CORS_ALLOWED_ORIGINS=https://plantilla.yoyodr.dev` → `https://mi-dominio.com`
-- `DJANGO_CSRF_TRUSTED_ORIGINS=https://plantilla.yoyodr.dev` → `https://mi-dominio.com`
+- `DJANGO_ALLOWED_HOSTS=.claude-code-hosted.yoyodr.dev` → `.mi-dominio.com`
+- `DJANGO_CORS_ALLOWED_ORIGINS=https://claude-code-hosted.yoyodr.dev` → `https://mi-dominio.com`
+- `DJANGO_CSRF_TRUSTED_ORIGINS=https://claude-code-hosted.yoyodr.dev` → `https://mi-dominio.com`
 
 ### 2.6 `frontend/package.json`
 
@@ -133,7 +133,7 @@ services:
 
 **Por qué:** cuando varios proyectos conviven en el mismo host con Dokploy, los contenedores comparten la red `dokploy-network`. Si dos proyectos definen un servicio `django` (mismo hostname), Traefik los confunde y termina resolviendo las peticiones contra el proyecto equivocado. El sufijo encapsula cada stack bajo su propio namespace DNS.
 
-Después del find-and-replace de `plantilla_django_react` → `mi_proyecto`, **sustituye `_plantilla` por `_mi_proyecto`** en ambos archivos:
+Después del find-and-replace de `claude_code_hosted` → `mi_proyecto`, **sustituye `_plantilla` por `_mi_proyecto`** en ambos archivos:
 
 ```bash
 sed -i 's/_plantilla/_mi_proyecto/g' docker-compose.dokploy.yml backend/compose/production/traefik/traefik.template.yml
