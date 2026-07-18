@@ -1,0 +1,51 @@
+name: panel-infra
+
+services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - /etc/panel/traefik.env
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+      - --certificatesresolvers.le.acme.email=${LE_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - /etc/panel/ttyd.htpasswd:/etc/traefik/secrets/ttyd.htpasswd:ro
+      - traefik_certs:/letsencrypt
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: panel
+      POSTGRES_USER: panel
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  traefik_certs:
+  postgres_data:
+  redis_data:
+
+secrets:
+  postgres_password:
+    file: /etc/panel/postgres_password.txt

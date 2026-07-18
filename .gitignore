@@ -1,3 +1,8 @@
 vps.env
 .playwright-mcp/
 .env
+# Generado en runtime por deploy/ttyd/render_routes.py — no se trackea
+deploy/traefik/dynamic/projects.yml
+
+# Config local de Claude Code, no es parte del proyecto
+.claude/

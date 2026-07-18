@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    ttyd-auth:
+      basicAuth:
+        usersFile: "/etc/traefik/secrets/ttyd.htpasswd"
+        removeHeader: true

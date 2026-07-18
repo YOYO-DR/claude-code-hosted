@@ -1,0 +1,16 @@
+[Unit]
+Description=ttyd terminal escape hatch for project %i
+After=network.target
+
+[Service]
+Type=simple
+User=agents
+Group=agents
+ExecStartPre=+/opt/panel/deploy/ttyd/allocate.sh %i
+ExecStart=/opt/panel/deploy/ttyd/start.sh %i
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=/srv/projects/%i
+
+[Install]
+WantedBy=multi-user.target

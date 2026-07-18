@@ -1,0 +1,16 @@
+[Unit]
+Description=Infra en Docker del panel (Traefik, Postgres, Redis)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/panel/deploy
+ExecStart=/usr/bin/docker compose -f compose.infra.yml up -d
+ExecStop=/usr/bin/docker compose -f compose.infra.yml down
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
