@@ -143,3 +143,89 @@ sudo -E python /opt/panel/manage.py setup_totp yoiner
 # El worker arranca al iniciar sesión desde la UI (el supervisor hace systemctl start claude-session@<sid>).
 ```
 
+
+## Fase 1 — Panel Django ASGI + worker de sesión (1 proyecto hardcoded)
+
+Estado: **Gate 1 cerrado — código completo + tests verdes + E2E real verificado
+en el VPS contra MiniMax (modelo MiniMax-M3).**
+
+### Desviaciones y decisiones de implementación
+
+- **Sesiones vía `claude-session@<sid>.service` template** (User=agents,
+  MemoryMax=1G, `Environment=SESSION_ID=%i`). El SESSION_ID viaja por el
+  nombre de instancia — sin archivo de env por sesión. `panel.env`
+  (`/etc/panel/panel.env`, root:panel 640) lleva DB/Redis/SECRET_KEY/SECRET_ENC_KEYS.
+  El token del modelo NUNCA va a disco: el worker lo descifra de la DB en
+  memoria (§4.3).
+- **migrate/collectstatic como root** dentro de `link-units.sh`: `/etc/panel`
+  es 700 root:root, así que el panel user no puede leer `panel.env`. Los
+  estáticos resultantes (`/opt/panel/staticfiles`) se devuelven a `panel`
+  para que `panel.service` los sirva.
+- **WS auth (4401 observable):** se acepta primero y luego se cierra con
+  4401/4404 — un `close()` antes de `accept()` se traduce a HTTP 403 y el
+  código se pierde (navegador vería 1006).
+- **Panel en el root** (`claude-code-hosted.yoyodr.dev/`) con `priority: 1`;
+  los routers de ttyd suben a `priority: 100` para ganar en
+  `/projects/<slug>/terminal`.
+- **WhiteNoise** sirve estáticos del admin sin necesidad de nginx aparte.
+- **Modelo por defecto: MiniMax-M3**, no Anthropic. El `ModelProfile`
+  `minimax-m3` apunta a `https://litellm-litellm-af059f-147-93-187-202.sslip.io`
+  con el token cifrado en DB. Esto evita pedir credenciales Anthropic
+  adicionales y se alinea con el entorno donde el usuario ya opera
+  (la shell `claude-minimax-nope()`).
+- **Resiliencia Redis en el worker:** el `brpop` captura `ConnectionError` /
+  `TimeoutError` / `BusyLoadingError` / `OSError` y reintenta cada 1s.
+  Sin esto, Redis caído 30s mata el worker por TimeoutError,
+  contradiciendo el check del gate.
+
+### Resultados del Gate 1 (2026-07-18)
+
+| Check | Resultado |
+|-------|-----------|
+| no-duplicación con `last_seq` (property test) | ✅ Hypothesis en `tests/unit/test_stream.py` |
+| serialización de todos los tipos de evento del SDK | ✅ `tests/unit/test_serialize.py` (System/Assistant/User/Result + TextBlock/ThinkingBlock/ToolUseBlock/ToolResultBlock) |
+| payload malformado en `:in` descartado sin tumbar | ✅ try/except log+continue en `_loop` |
+| persistencia con seq monotónico + idempotencia | ✅ `tests/unit/test_events.py` (savepoint atómico) |
+| WS sin auth → close(4401) observable | ✅ `tests/integration/test_consumer.py` + verificado en vivo contra VPS local |
+| Dos pestañas → ambas reciben el stream | ✅ consumer stateless (cada cliente su propio SeqDedup + pubsub) |
+| Cifrado MultiFernet (rotación sin migración) | ✅ `tests/unit/test_crypto.py` |
+| Supervisor restringido a acciones permitidas | ✅ `tests/unit/test_supervisor.py` |
+| **E2E tarea real** (crear/leer archivo X) | ✅ `HELLO.txt` y `RECOVERED.txt` creados por el agente en `/srv/projects/demo/`, leídos y reportados |
+| **E2E init reporta modelo correcto** | ✅ `system.init` reporta `model: MiniMax-M3`, `model_reported` en DB coincide |
+| **kill -9 al worker → restart → status honesto** | ✅ PID 6559 matado → systemd revive a PID 7999 (NRestarts=1, 3 s) → 153 eventos en PG, todos sobrevivieron |
+| **Redis caído 30s → recuperación completa** | ✅ `docker stop panel-infra-redis-1` durante un turno largo → worker logueó "bus Redis no disponible" 5+ veces, NO murió → Redis vuelve → siguiente mensaje ejecuta correctamente (`POST_OUTAGE.txt`) |
+| Tests pytest verdes | ✅ 20/20 |
+| ruff format + ruff check | ✅ limpio |
+| mypy | ✅ 22 files sin issues |
+| `git push origin main` | ✅ hasta `742d452` |
+
+### Cómo operar (Fase 1)
+
+```bash
+# Tras git pull, una sola vez:
+sudo bash /opt/panel/deploy/install.sh        # uv sync + panel.env + sudoers
+sudo bash /opt/panel/deploy/link-units.sh     # units + migrate + collectstatic + panel up
+
+# Provision de ModelProfile MiniMax (ya hecho en este deploy, idempotente):
+cd /opt/panel && set -a && source /etc/panel/panel.env && set +a && \
+  /opt/panel/.venv/bin/python -c "
+import os, django; os.environ.setdefault('DJANGO_SETTINGS_MODULE','panel.settings')
+django.setup()
+from panel.core.models import ModelProfile, Project
+from panel.core.crypto import encrypt
+mp, _ = ModelProfile.objects.update_or_create(
+  name='minimax-m3',
+  defaults={'provider':ModelProfile.Provider.MINIMAX,'base_url':'https://litellm-litellm-af059f-147-93-187-202.sslip.io','model':'MiniMax-M3','auth_token_enc':encrypt('sk-Xo4NvaUE_GliKE8vcdtteg')},
+)
+Project.objects.filter(slug='demo').update(model_profile=mp)
+print('ok')
+"
+
+# Login + TOTP (ya hecho):
+# usuario yoiner / password PanelAdmin@2026 / TOTP en otpauth://...
+
+# Flujo normal:
+# - Login en https://claude-code-hosted.yoyodr.dev/login/
+# - Click ▶ Demo → arranca claude-session@<sid>
+# - Stream + chat en /sessions/<sid>/
+```
