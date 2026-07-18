@@ -1,0 +1,62 @@
+[project]
+name = "panel"
+version = "0.1.0"
+description = "Panel web para sesiones headless de Claude Code en un VPS"
+requires-python = "==3.12.*"
+dependencies = [
+    "django>=5.1,<5.2",
+    "channels>=4.1",
+    "channels-redis>=4.2",
+    "uvicorn[standard]>=0.34",
+    "redis>=5.2",
+    "psycopg[binary]>=3.2",
+    "django-otp>=1.5",
+    "qrcode[pil]>=8.0",
+    "cryptography>=44.0",
+    "claude-agent-sdk>=0.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.9",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.122",
+    "fakeredis>=2.26",
+    "daphne>=4.1",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "django-stubs[compatible-mypy]>=5.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["legacy", "*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "DJ"]
+# DJ001: §3 especifica varios campos string como nullable a propósito (NULL =
+# "sin valor", distinto de cadena vacía). B008: patrón de Django FK en defaults.
+ignore = ["B008", "DJ001"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "panel.settings_test"
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = "-p no:cacheprovider"
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["mypy_django_plugin.main"]
+exclude = ["legacy/", "migrations/"]
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.django-stubs]
+django_settings_module = "panel.settings_test"
+
+[tool.coverage.run]
+source = ["panel/core", "workers"]
+omit = ["*/migrations/*", "*/tests/*"]

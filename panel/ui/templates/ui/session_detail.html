@@ -1,0 +1,80 @@
+{% extends "ui/base.html" %}
+{% block title %}Sesión {{ session.id|truncatechars:12 }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'session_list' %}">← Sesiones</a></p>
+  <h1>Sesión <span class="muted">{{ session.id }}</span></h1>
+  <p>
+    Proyecto <strong>{{ session.project.slug }}</strong> ·
+    Estado <span class="pill" id="status">{{ session.get_status_display }}</span> ·
+    Costo <span id="cost">${{ session.total_cost_usd }}</span> ·
+    Conexión <span class="pill" id="ws-state">…</span>
+  </p>
+
+  <div id="stream">
+    {% for ev in events %}
+      <div class="ev {{ ev.type }}" data-seq="{{ ev.seq }}">[{{ ev.seq }}] {{ ev.type }}: {{ ev.payload }}</div>
+    {% endfor %}
+  </div>
+
+  <form id="chat" style="display:flex; gap:.5rem; margin-top:.6rem">
+    <input id="msg" placeholder="Mensaje para el agente…" style="flex:1" autocomplete="off">
+    <button type="submit">Enviar</button>
+    <button type="button" id="interrupt">Interrumpir</button>
+  </form>
+
+  <form class="inline" method="post" action="{% url 'session_stop' session.id %}" style="margin-top:.6rem">
+    {% csrf_token %}<button>■ Detener sesión</button>
+  </form>
+
+  <script>
+    const sid = "{{ session.id }}";
+    let lastSeq = {{ last_seq }};
+    const stream = document.getElementById("stream");
+    const wsState = document.getElementById("ws-state");
+    const statusEl = document.getElementById("status");
+    const costEl = document.getElementById("cost");
+
+    function render(ev) {
+      if (typeof ev.seq === "number" && ev.seq <= lastSeq &&
+          stream.querySelector('[data-seq="' + ev.seq + '"]')) return;
+      const div = document.createElement("div");
+      div.className = "ev " + (ev.type || "").split(".")[0];
+      if (typeof ev.seq === "number") { div.dataset.seq = ev.seq; lastSeq = Math.max(lastSeq, ev.seq); }
+      div.textContent = "[" + (ev.seq ?? "·") + "] " + ev.type + ": " + JSON.stringify(ev.payload);
+      stream.appendChild(div);
+      stream.scrollTop = stream.scrollHeight;
+      if (ev.type === "result" && ev.payload && ev.payload.total_cost_usd != null)
+        costEl.textContent = "$" + ev.payload.total_cost_usd;
+      if (ev.type && ev.type.startsWith("system")) statusEl.textContent = "running";
+      if (ev.type === "result") statusEl.textContent = "idle";
+    }
+
+    let ws;
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(proto + "://" + location.host + "/ws/session/" + sid + "?last_seq=" + lastSeq);
+      ws.onopen = () => wsState.textContent = "conectado";
+      ws.onclose = (e) => {
+        wsState.textContent = e.code === 4401 ? "no autorizado" : "desconectado";
+        if (e.code !== 4401 && e.code !== 4404) setTimeout(connect, 2000);
+      };
+      ws.onmessage = (e) => {
+        const m = JSON.parse(e.data);
+        if (m.channel === "out") render(m.event);
+      };
+    }
+    connect();
+
+    document.getElementById("chat").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const input = document.getElementById("msg");
+      if (input.value && ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: "user_message", text: input.value }));
+        input.value = "";
+      }
+    });
+    document.getElementById("interrupt").addEventListener("click", () => {
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "interrupt" }));
+    });
+  </script>
+{% endblock %}

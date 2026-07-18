@@ -1,0 +1,35 @@
+{% extends "ui/base.html" %}
+{% block title %}Sesiones · Panel{% endblock %}
+{% block content %}
+  <h1>Sesiones</h1>
+
+  <h2>Iniciar sesión</h2>
+  {% if projects %}
+    {% for p in projects %}
+      <form class="inline" method="post" action="{% url 'session_start' p.slug %}">
+        {% csrf_token %}
+        <button>▶ {{ p.name }} <span class="muted">({{ p.slug }})</span></button>
+      </form>
+    {% endfor %}
+  {% else %}
+    <p class="muted">No hay proyectos activos. Crea uno en el <a href="/admin/">admin</a>.</p>
+  {% endif %}
+
+  <h2>Historial</h2>
+  <table>
+    <thead><tr><th>Sesión</th><th>Proyecto</th><th>Estado</th><th>Costo</th><th>Creada</th></tr></thead>
+    <tbody>
+      {% for s in sessions %}
+        <tr>
+          <td><a href="{% url 'session_detail' s.id %}">{{ s.id|truncatechars:12 }}</a></td>
+          <td>{{ s.project.slug }}</td>
+          <td><span class="pill">{{ s.get_status_display }}</span></td>
+          <td>${{ s.total_cost_usd }}</td>
+          <td class="muted">{{ s.created_at|date:"Y-m-d H:i" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Sin sesiones todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

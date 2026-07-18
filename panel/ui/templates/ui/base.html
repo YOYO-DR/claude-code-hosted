@@ -1,0 +1,44 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Panel Claude Code{% endblock %}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: Canvas; color: CanvasText; }
+    header { display: flex; justify-content: space-between; align-items: center;
+             padding: .6rem 1rem; border-bottom: 1px solid #8884; }
+    header a { color: inherit; }
+    main { padding: 1rem; max-width: 1000px; margin: 0 auto; }
+    .muted { opacity: .7; }
+    .pill { display: inline-block; padding: .1rem .5rem; border-radius: 1rem;
+            border: 1px solid #8886; font-size: .85em; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8883; }
+    button { font: inherit; padding: .35rem .8rem; cursor: pointer; }
+    #stream { border: 1px solid #8884; border-radius: 6px; padding: .5rem;
+              height: 55vh; overflow-y: auto; background: #0001; }
+    .ev { margin: .3rem 0; padding: .3rem .5rem; border-left: 3px solid #8886; white-space: pre-wrap; }
+    .ev.assistant { border-color: #4a90d9; }
+    .ev.result { border-color: #3c9; }
+    .ev.system { border-color: #a8a; }
+    form.inline { display: inline; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong><a href="{% url 'session_list' %}" style="text-decoration:none">Claude Code · Panel</a></strong>
+    <span>
+      {% if user.is_authenticated %}
+        <span class="muted">{{ user.username }}</span>
+        <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}
+          <button>Salir</button>
+        </form>
+      {% endif %}
+    </span>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>
