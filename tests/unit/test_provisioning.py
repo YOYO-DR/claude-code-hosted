@@ -65,6 +65,24 @@ def test_needs_restart_on_mcp_change(tmp_path):
     assert session_svc.needs_restart(session) is True
 
 
+def test_privileged_uses_sudo_helper_when_not_root(monkeypatch):
+    """panel (no root) + sudo + helper presente -> sudo al helper, NO render en
+    proceso."""
+    from panel.core.services import privileged
+
+    calls = []
+    monkeypatch.setattr(privileged.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(privileged.shutil, "which", lambda _: "/usr/bin/sudo")
+    monkeypatch.setattr(privileged.os.path, "exists", lambda _: True)
+    monkeypatch.setattr(privileged.subprocess, "run", lambda *a, **k: calls.append(a[0]))
+    privileged.run_provision("alpha", "/srv/projects/alpha")
+    privileged.run_render()
+    assert calls == [
+        ["sudo", "-n", privileged.PROVISION_HELPER, "alpha", "/srv/projects/alpha"],
+        ["sudo", "-n", privileged.RENDER_HELPER],
+    ]
+
+
 def test_needs_restart_false_before_start(tmp_path):
     project = _project("alpha", tmp_path)
     session = Session.objects.create(project=project)  # started_at None

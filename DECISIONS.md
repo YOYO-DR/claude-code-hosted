@@ -126,3 +126,31 @@ skills y `.mcp.json`.
 Badge "reinicio requerido": se computa comparando `updated_at` (auto_now) de
 `McpServer`/`ModelProfile` del proyecto contra `session.started_at` — cero
 campos ni migraciones nuevas.
+
+---
+
+## D7 — Modelo de privilegios del render/provisioning (Fase 2)
+
+El panel corre como usuario `panel` (mínimo privilegio). Pero materializar
+config y provisionar proyectos necesita root:
+- **Leer `/etc/panel/panel.env`** (creds de DB) — 640 root:panel; el render lo
+  necesita para conectar a Postgres. Sourcearlo requiere root.
+- **`chown` del dir del proyecto a `agents`** — el worker (User=agents) escribe
+  código ahí; `panel` no puede chownear a otro usuario.
+- **Escribir config en dirs de `agents`** — root puede; `panel` no.
+
+Solución (mismo patrón que `supervisor.py` con systemctl): dos helpers root
+(`deploy/panel-render.sh`, `deploy/panel-provision.sh <slug> <path>`) invocados
+por el panel vía `sudo -n`, con sudoers restringido (`sudoers.d-panel`). El
+provision valida que el path esté bajo `/srv/projects` y el slug sea
+`[a-z0-9-]`. `panel-provision.sh` hace mkdir + git init + chown agents + render.
+
+`privileged.py` decide: root → render en proceso; `panel`+sudo+helper → sudo;
+local/tests (sin helper) → en proceso sin chown. Los archivos de config quedan
+root-owned pero world-readable (644): el agente los LEE, no los escribe. El dir
+del proyecto queda `agents`-owned para que el worker escriba código.
+
+Verificado en el VPS: deny duro de settings.json bloquea Read a
+`/srv/projects/<otro>` y `~/.ssh` con
+`<tool_use_error>File is in a directory that is denied by your permission
+settings.</tool_use_error>`, incluso bajo `bypassPermissions` (deny > allow).

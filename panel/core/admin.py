@@ -3,8 +3,8 @@ from __future__ import annotations
 from django import forms
 from django.contrib import admin
 
-from panel.core import crypto, models, renderer
-from panel.core.services import provisioning
+from panel.core import crypto, models
+from panel.core.services import privileged, provisioning
 
 
 class ModelProfileForm(forms.ModelForm):
@@ -49,7 +49,7 @@ class PermissionPolicyAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
-        renderer.render_all()
+        privileged.run_render()
 
 
 @admin.register(models.Project)
@@ -71,7 +71,7 @@ class ProjectAdmin(admin.ModelAdmin):
         if not change:
             provisioning.provision_project(obj)
         else:
-            renderer.render_all()
+            privileged.run_render()
 
     @admin.action(description="Archivar (detiene sesiones, conserva datos)")
     def archivar(self, request, queryset):
@@ -85,11 +85,11 @@ class _RenderOnSaveAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
-        renderer.render_all()
+        privileged.run_render()
 
     def delete_model(self, request, obj):
         super().delete_model(request, obj)
-        renderer.render_all()
+        privileged.run_render()
 
 
 @admin.register(models.Skill)

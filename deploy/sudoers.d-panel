@@ -1,3 +1,7 @@
 # Instalado en /etc/sudoers.d/panel por link-units.sh. El usuario `panel` solo
-# puede arrancar/parar/consultar units de sesión — nada más con sudo.
+# puede: arrancar/parar/consultar units de sesión, y correr los helpers de
+# render/provisioning (que corren como root para leer panel.env y chown a
+# `agents`). Nada más con sudo.
 panel ALL=(root) NOPASSWD: /usr/bin/systemctl start claude-session@*, /usr/bin/systemctl stop claude-session@*, /usr/bin/systemctl status claude-session@*
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-render.sh
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-provision.sh [a-z0-9-]* /srv/projects/*

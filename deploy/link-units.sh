@@ -12,6 +12,11 @@ for unit in panel-infra.service panel.service "tmux@.service" "ttyd@.service" "c
   ln -sf "${SRC}/${unit}" "${DST}/${unit}"
 done
 
+# Helpers privilegiados de render/provisioning + sudoers para el panel.
+chmod 0755 /opt/panel/deploy/panel-render.sh /opt/panel/deploy/panel-provision.sh
+install -m 0440 -o root -g root /opt/panel/deploy/sudoers.d-panel /etc/sudoers.d/panel
+visudo -cf /etc/sudoers.d/panel >/dev/null
+
 systemctl daemon-reload
 systemctl enable --now panel-infra.service
 
