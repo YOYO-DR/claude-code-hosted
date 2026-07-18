@@ -15,10 +15,17 @@ done
 systemctl daemon-reload
 systemctl enable --now panel-infra.service
 
+# migrate/collectstatic corren como root: solo root lee /etc/panel/panel.env
+# (los secretos no se exponen al usuario panel via filesystem). Los estáticos
+# generados se devuelven a panel para que panel.service los sirva.
+set -a
+# shellcheck disable=SC1091
+source /etc/panel/panel.env
+set +a
+
 echo "==> Esperando a Postgres..."
 for _ in $(seq 1 30); do
-  if runuser -u panel -- bash -c 'set -a; source /etc/panel/panel.env; set +a;
-       '"$VENV"'/python -c "import psycopg,os; psycopg.connect(host=os.environ[\"PANEL_DB_HOST\"], port=os.environ[\"PANEL_DB_PORT\"], dbname=os.environ[\"PANEL_DB_NAME\"], user=os.environ[\"PANEL_DB_USER\"], password=os.environ[\"PANEL_DB_PASSWORD\"]).close()"' 2>/dev/null; then
+  if "${VENV}/python" -c "import psycopg,os; psycopg.connect(host=os.environ['PANEL_DB_HOST'], port=os.environ['PANEL_DB_PORT'], dbname=os.environ['PANEL_DB_NAME'], user=os.environ['PANEL_DB_USER'], password=os.environ['PANEL_DB_PASSWORD']).close()" 2>/dev/null; then
     echo "  Postgres listo."
     break
   fi
@@ -26,9 +33,10 @@ for _ in $(seq 1 30); do
 done
 
 echo "==> Migraciones + estáticos"
-runuser -u panel -- bash -c "set -a; source /etc/panel/panel.env; set +a;
-  cd /opt/panel && ${VENV}/python manage.py migrate --noinput &&
-  ${VENV}/python manage.py collectstatic --noinput"
+cd /opt/panel
+"${VENV}/python" manage.py migrate --noinput
+"${VENV}/python" manage.py collectstatic --noinput
+chown -R panel:panel /opt/panel/staticfiles
 
 echo "==> Levantando el panel"
 systemctl enable --now panel.service
