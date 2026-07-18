@@ -229,3 +229,42 @@ print('ok')
 # - Click ▶ Demo → arranca claude-session@<sid>
 # - Stream + chat en /sessions/<sid>/
 ```
+
+---
+
+## Fase 2 — CRUD de proyectos + renderer + perfiles de modelo — GATE CERRADO (2026-07-18)
+
+Renderer (§4.3) como fuente-de-verdad→disco, CRUD vía Django admin (token
+write-only cifrado), provisioning de proyectos y deny dinámicas todos-contra-
+todos. Commits `a2d02f1` (renderer/CRUD) + `b7af3db` (privilegios sudo).
+
+### Gate 2 — resultados
+
+| Check | Resultado |
+|-------|-----------|
+| Golden files: byte-a-byte, doble render sin diff | ✅ `test_double_render_no_diff` (snapshot completo idéntico) |
+| Nombres unicode/espacios escapados | ✅ `test_unicode_and_spaces_escaped` (`mi servidor ñ`, `例え.test`, `skill "raro": ñ` — JSON parsea, YAML frontmatter escapado) |
+| 2 proyectos, perfiles distintos → init reporta modelo correcto | ✅ alpha→`MiniMax-M3`, beta→`all-team-models` (init events reales del SDK) |
+| Deny obligatorias + dinámicas en settings.json | ✅ alpha niega beta/`~/.ssh`, no a sí mismo; unit + disco |
+| **Deny duro verificado en eventos** | ✅ el modelo INTENTÓ `Read(/srv/projects/beta/…)` y `Read(~/.ssh/id_rsa)`; ambos → `<tool_use_error>File is in a directory that is denied by your permission settings</tool_use_error>` (incluso bajo `bypassPermissions`) |
+| Editar MCP → badge "reinicio requerido" | ✅ `needs_restart` False→True al añadir MCP tras arrancar (por `updated_at` vs `started_at`) |
+| MCP reflejado tras reinicio (`/mcp`) | ✅ `demo-mcp` aparece en `system.init.mcp_servers` de la sesión nueva; beta sin él |
+| Skill global en ambos, skill de proyecto solo en el suyo | ✅ init de alpha: `[global-notes, alpha-notes,…]`; init de beta: `[global-notes,…]` sin `alpha-notes` |
+| Escritura permitida en dir propio | ✅ `OK.txt`=`gate2` creado por el agente en `/srv/projects/alpha` |
+| Deny dinámica al crear proyecto N → re-render de N-1 | ✅ al provisionar `gamma`, alpha/beta/gamma se niegan mutuamente |
+| Flujo web-create como usuario `panel` (no-root) | ✅ euid 1003 → sudo `panel-provision.sh` → dir `agents`-owned + rendered |
+| 33/33 tests, ruff + mypy limpios | ✅ |
+
+### Modelo de ownership (D7)
+
+- Panel (`panel`) sin privilegios; render/provisioning vía `sudo -n`
+  `deploy/panel-render.sh` / `panel-provision.sh <slug> <path>` (sudoers
+  restringido, valida path bajo `/srv/projects` y slug `[a-z0-9-]`).
+- Config root-owned world-readable (644): el agente la LEE. Dir del proyecto
+  `agents`-owned: el worker escribe código.
+
+### Estado del VPS tras Gate 2
+
+- Proyectos demo: `demo`, `alpha` (MiniMax-M3), `beta` (all-team-models),
+  `gamma`. Skills: `global-notes` (global), `alpha-notes` (alpha).
+- MCP dummy de prueba eliminados; sin sesiones colgadas.
