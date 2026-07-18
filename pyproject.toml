@@ -44,6 +44,7 @@ ignore = ["B008", "DJ001"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "panel.settings_test"
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
 addopts = "-p no:cacheprovider"

@@ -103,3 +103,26 @@ Cero renovaciones durante 15 años. Cloudflare queda en Full (strict).
 
 Esto reemplaza por completo la pregunta original wildcard-vs-HTTP-01 (D3) y la
 idea de `LE_EMAIL` en `install.sh`.
+
+---
+
+## D6 — Sintaxis de patrones de permisos del renderer (Fase 2)
+
+`settings.json` usa el esquema oficial de Claude Code:
+`{"permissions": {"allow": [...], "deny": [...]}}`. Los patrones siguen la
+sintaxis `Tool(specifier)` con rutas estilo gitignore: `//abs/path/**` para
+absolutas, `./rel` para relativas al cwd del proyecto, `**` recursivo. Las
+`MANDATORY_DENY` (constante en código) ya usaban esta forma y se validó que
+coincide con la doc; no hubo que ajustarlas.
+
+El **modo** de permisos (auto→`bypassPermissions`, approve→`default`) NO va en
+`settings.json`: lo fija el worker en `ClaudeAgentOptions.permission_mode`
+(§4.2), coherente con "settings.json SIN env de modelo" (§4.3).
+
+El **env del modelo** (tokens) nunca se materializa a disco: se inyecta desde
+la DB en memoria del worker (§4.2/§4.3). El renderer solo escribe permisos,
+skills y `.mcp.json`.
+
+Badge "reinicio requerido": se computa comparando `updated_at` (auto_now) de
+`McpServer`/`ModelProfile` del proyecto contra `session.started_at` — cero
+campos ni migraciones nuevas.

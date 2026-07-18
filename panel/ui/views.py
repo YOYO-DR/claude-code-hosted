@@ -61,13 +61,18 @@ def session_list(request):
 def session_detail(request, sid):
     if not request.user.is_verified():
         return redirect("login")
-    session = get_object_or_404(Session, id=sid)
+    session = get_object_or_404(Session.objects.select_related("project__model_profile"), id=sid)
     events = session.events.order_by("seq")
     last_seq = events.last().seq if events.exists() else 0
     return render(
         request,
         "ui/session_detail.html",
-        {"session": session, "events": events, "last_seq": last_seq},
+        {
+            "session": session,
+            "events": events,
+            "last_seq": last_seq,
+            "needs_restart": session_svc.needs_restart(session),
+        },
     )
 
 

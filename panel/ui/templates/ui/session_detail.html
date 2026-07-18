@@ -10,6 +10,13 @@
     Conexión <span class="pill" id="ws-state">…</span>
   </p>
 
+  {% if needs_restart %}
+    <p class="pill" style="background:#7a4a00;color:#ffd">
+      ⟳ Reinicio requerido — la config de MCP o el modelo cambió desde que arrancó esta sesión.
+      Detén y vuelve a arrancar para aplicar los cambios.
+    </p>
+  {% endif %}
+
   <div id="stream">
     {% for ev in events %}
       <div class="ev {{ ev.type }}" data-seq="{{ ev.seq }}">[{{ ev.seq }}] {{ ev.type }}: {{ ev.payload }}</div>
