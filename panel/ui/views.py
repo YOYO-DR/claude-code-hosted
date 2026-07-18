@@ -166,7 +166,7 @@ def tg_webhook(request):
 
     client = redis.from_url(settings.REDIS_URL)
     try:
-        claimed = perm_svc.claim_answer_sync(client, request_id, answer)
+        claimed = perm_svc.claim_answer_sync(client, request_id, answer, source="telegram")
     except (redis.RedisError, ValueError):
         claimed = False
     finally:

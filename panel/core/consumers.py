@@ -83,8 +83,9 @@ class SessionConsumer(AsyncWebsocketConsumer):
             request_id = msg.get("request_id")
             answer = msg.get("answer")
             if request_id and answer in {"allow", "deny", "allow_always"}:
+                # Formato answer|source (source=web desde el WS del panel).
                 await self._redis.set(
-                    bus.key_answer(request_id), answer, nx=True, ex=bus.ANSWER_TTL
+                    bus.key_answer(request_id), f"{answer}|web", nx=True, ex=bus.ANSWER_TTL
                 )
 
     # -- internos --------------------------------------------------------

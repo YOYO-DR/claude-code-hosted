@@ -143,6 +143,29 @@ def test_allow_always_persists_rule_and_renders(monkeypatch):
     assert calls == [1]
 
 
+def test_apply_answer_source_telegram(monkeypatch):
+    from panel.core.services import privileged
+
+    monkeypatch.setattr(privileged, "run_render", lambda: None)
+    session = _session()
+    req = perm_svc.create_request(session, "Bash", {}, 900)
+    perm_svc.apply_answer(req, "allow", source="telegram")
+    req.refresh_from_db()
+    assert req.resolved_by == PermissionRequest.ResolvedBy.TELEGRAM
+
+
+def test_claim_encodes_source():
+    import fakeredis
+
+    from panel.core import bus
+
+    client = fakeredis.FakeStrictRedis(server=fakeredis.FakeServer())
+    perm_svc.claim_answer_sync(client, "rid", "allow", source="telegram")
+    assert client.get(bus.key_answer("rid")) == b"allow|telegram"
+    assert perm_svc._split_answer("allow|telegram") == ("allow", "telegram")
+    assert perm_svc._split_answer("allow") == ("allow", "web")  # legacy
+
+
 def test_apply_answer_idempotent(monkeypatch):
     from panel.core.services import privileged
 
@@ -218,7 +241,7 @@ def test_concurrent_answers_one_wins():
         t.join()
     assert sorted(results) == [False, True]  # exactamente uno reclama
     val = fakeredis.FakeStrictRedis(server=server).get(bus.key_answer(request_id))
-    assert val in (b"allow", b"deny")
+    assert val in (b"allow|web", b"deny|web")
 
 
 def test_claim_rejects_invalid_answer():

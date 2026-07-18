@@ -54,22 +54,30 @@ def serialize_request(req: PermissionRequest) -> dict:
 
 
 def apply_answer(
-    req: PermissionRequest, answer: str, always_rules: list[str] | None = None
+    req: PermissionRequest,
+    answer: str,
+    *,
+    source: str = "web",
+    always_rules: list[str] | None = None,
 ) -> None:
     """Transición idempotente del PermissionRequest según la respuesta ganadora.
-    `allow_always` además persiste la(s) regla(s) en la policy y dispara re-render.
-    `always_rules` viene de las suggestions del SDK (ya scopeadas, p.ej.
-    `Bash(git push:*)`); si no hay, cae al nombre de la herramienta."""
+    `source` (web|telegram) fija resolved_by para allow/deny; timeout siempre es
+    TIMEOUT. `allow_always` persiste la(s) regla(s) y dispara re-render."""
     if req.status != PermissionRequest.Status.PENDING:
         return  # ya resuelto: idempotente
-    mapping = {
-        "allow": (PermissionRequest.Status.ALLOWED, PermissionRequest.ResolvedBy.WEB),
-        "allow_always": (PermissionRequest.Status.ALLOWED_ALWAYS, PermissionRequest.ResolvedBy.WEB),
-        "deny": (PermissionRequest.Status.DENIED, PermissionRequest.ResolvedBy.WEB),
-        "timeout": (PermissionRequest.Status.EXPIRED, PermissionRequest.ResolvedBy.TIMEOUT),
+    status_map = {
+        "allow": PermissionRequest.Status.ALLOWED,
+        "allow_always": PermissionRequest.Status.ALLOWED_ALWAYS,
+        "deny": PermissionRequest.Status.DENIED,
+        "timeout": PermissionRequest.Status.EXPIRED,
     }
-    status, resolved_by = mapping[answer]
-    req.status = status
+    if answer == "timeout":
+        resolved_by = PermissionRequest.ResolvedBy.TIMEOUT
+    elif source == "telegram":
+        resolved_by = PermissionRequest.ResolvedBy.TELEGRAM
+    else:
+        resolved_by = PermissionRequest.ResolvedBy.WEB
+    req.status = status_map[answer]
     req.resolved_by = resolved_by
     req.save(update_fields=["status", "resolved_by", "updated_at"])
     if answer == "allow_always":
@@ -117,12 +125,21 @@ def expire_pending(session: Session) -> int:
     )
 
 
-def claim_answer_sync(redis_client, request_id: str, answer: str) -> bool:
-    """Escribe la respuesta con SET NX. True si este llamador la reclamó;
-    False si otro ya había respondido (conflicto). Redis síncrono (web/HTTP)."""
+def claim_answer_sync(redis_client, request_id: str, answer: str, source: str = "web") -> bool:
+    """Escribe la respuesta con SET NX, codificando el origen como `answer|source`.
+    True si este llamador la reclamó; False si otro ya respondió (conflicto)."""
     if answer not in {"allow", "deny", "allow_always"}:
         raise ValueError(f"respuesta inválida: {answer}")
-    return bool(redis_client.set(bus.key_answer(request_id), answer, nx=True, ex=bus.ANSWER_TTL))
+    value = f"{answer}|{source}"
+    return bool(redis_client.set(bus.key_answer(request_id), value, nx=True, ex=bus.ANSWER_TTL))
+
+
+def _split_answer(raw: str | None) -> tuple[str, str]:
+    """`answer|source` → (answer, source). Tolera valores legacy sin origen."""
+    if not raw:
+        return "timeout", "web"
+    answer, sep, source = raw.partition("|")
+    return answer, (source if sep else "web")
 
 
 POLL_INTERVAL = 0.5  # s; cada cuánto sondea el worker la respuesta
@@ -165,9 +182,10 @@ async def request_and_wait(
     timeout_s = await sync_to_async(timeout_seconds)(session)
     req = await sync_to_async(create_request)(session, tool_name, effective, timeout_s)
     await aredis.publish(bus.key_perm(str(session.id)), json.dumps(serialize_request(req)))
-    answer = await _wait_answer(aredis, str(req.id), timeout_s, poll_interval)
+    raw = await _wait_answer(aredis, str(req.id), timeout_s, poll_interval)
+    answer, source = _split_answer(raw)
     final = answer if answer in {"allow", "allow_always", "deny"} else "timeout"
-    await sync_to_async(apply_answer)(req, final, always_rules)
+    await sync_to_async(apply_answer)(req, final, source=source, always_rules=always_rules)
     # Notifica la resolución (cualquier origen) para que el tg_bridge edite el
     # mensaje de Telegram y quite el teclado (§4.6). Best-effort.
     try:

@@ -5,11 +5,17 @@ disco de proyecto."""
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
 from django.conf import settings
 from django.utils import timezone
+
+# httpx loguea la URL completa (con el token del bot) a nivel INFO. Silenciar
+# para que el token no aparezca en journald.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 TG_TEXT_LIMIT = 4096
 CALLBACK_DATA_LIMIT = 64
