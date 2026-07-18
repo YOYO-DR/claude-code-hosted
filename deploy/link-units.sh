@@ -7,7 +7,7 @@ set -euo pipefail
 SRC="/opt/panel/deploy/systemd"
 DST="/etc/systemd/system"
 
-for unit in panel-infra.service "ttyd@.service"; do
+for unit in panel-infra.service "tmux@.service" "ttyd@.service"; do
   ln -sf "${SRC}/${unit}" "${DST}/${unit}"
 done
 

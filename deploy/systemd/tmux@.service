@@ -1,0 +1,18 @@
+[Unit]
+Description=Persistent tmux session cc-%i (escotilla de terminal)
+After=network.target
+
+[Service]
+# oneshot + RemainAfterExit: ExecStart crea la sesion (el servidor tmux se
+# daemoniza) y la unidad queda "active". El servidor tmux vive desacoplado de
+# ttyd@%i, asi que matar/reiniciar ttyd nunca tumba la sesion. Ver Gate 0.
+Type=oneshot
+RemainAfterExit=yes
+User=agents
+Group=agents
+WorkingDirectory=/srv/projects/%i
+ExecStart=/usr/bin/tmux new-session -A -d -s cc-%i
+ExecStop=/usr/bin/tmux kill-session -t cc-%i
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 [Unit]
 Description=ttyd terminal escape hatch for project %i
-After=network.target
+After=network.target tmux@%i.service
+Requires=tmux@%i.service
 
 [Service]
 Type=simple

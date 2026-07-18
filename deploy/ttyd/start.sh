@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Corre como usuario 'agents' (ExecStart de ttyd@.service). El puerto ya fue
-# asignado por allocate.sh (ExecStartPre, corre como root).
+# asignado por allocate.sh (ExecStartPre, corre como root) y la sesion tmux
+# cc-<slug> la garantiza tmux@<slug>.service (Requires). Aqui solo se adjunta:
+# si ttyd muere, la sesion sigue viva en su propia unidad.
 set -euo pipefail
 
 SLUG="$1"
