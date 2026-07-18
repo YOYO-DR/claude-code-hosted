@@ -41,6 +41,13 @@ fi
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
 systemctl enable --now docker >/dev/null
 
+echo "==> Desactivando el ttyd.service por defecto del paquete apt"
+# El paquete Ubuntu trae su propio ttyd.service (puerto 7681, sin --writable,
+# con -O login) auto-habilitado. Choca con nuestro pool de puertos propio
+# (ttyd@.service, ver deploy/ttyd/) asi que lo enmascaramos.
+systemctl disable --now ttyd.service >/dev/null 2>&1 || true
+systemctl mask ttyd.service >/dev/null 2>&1 || true
+
 echo "==> Node LTS + Claude Code CLI"
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | sed 's/^v//;s/\..*//')" -lt 22 ]]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
