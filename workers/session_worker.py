@@ -50,14 +50,22 @@ TIMEOUT_MSG = (
 )
 
 
-def _suggested_allow_rules(ctx: object) -> list[str]:
-    """Reglas 'allow' scopeadas que sugiere el SDK para este tool use (p.ej.
-    `Bash(git push:*)`), para persistir en `allow_always`. Formato settings.json:
-    `ToolName(ruleContent)`."""
+def _allow_suggestions(ctx: object) -> list:
+    """PermissionUpdate crudos de tipo addRules/allow que sugiere el SDK para este
+    tool use. Se devuelven al SDK como `updated_permissions` (efecto live en la
+    sesión) y se derivan a strings para persistir en la policy."""
+    return [
+        upd
+        for upd in (getattr(ctx, "suggestions", None) or [])
+        if getattr(upd, "type", None) == "addRules" and getattr(upd, "behavior", None) == "allow"
+    ]
+
+
+def _rules_to_strings(updates: list) -> list[str]:
+    """Convierte PermissionUpdate a entradas de settings.json `ToolName(content)`
+    (p.ej. `Bash(git push *)`)."""
     rules: list[str] = []
-    for upd in getattr(ctx, "suggestions", None) or []:
-        if getattr(upd, "type", None) != "addRules" or getattr(upd, "behavior", None) != "allow":
-            continue
+    for upd in updates:
         for r in getattr(upd, "rules", None) or []:
             tool = getattr(r, "tool_name", None)
             if not tool:
@@ -65,6 +73,11 @@ def _suggested_allow_rules(ctx: object) -> list[str]:
             content = getattr(r, "rule_content", None)
             rules.append(f"{tool}({content})" if content else tool)
     return rules
+
+
+def _suggested_allow_rules(ctx: object) -> list[str]:
+    """Atajo: strings de reglas 'allow' sugeridas (usado en tests)."""
+    return _rules_to_strings(_allow_suggestions(ctx))
 
 
 def redis_exceptions() -> tuple[type[BaseException], ...]:
@@ -226,16 +239,24 @@ class Worker:
         resuelve. La reescritura (si aplica) va en updated_input."""
         session = self._session
         assert session is not None  # seteado en run() antes de cualquier turno
-        always_rules = _suggested_allow_rules(ctx)
+        suggestions = _allow_suggestions(ctx)
+        rule_strings = _rules_to_strings(suggestions)
         await self._set_status(session, Session.Status.WAITING_APPROVAL)
         try:
             answer, effective, changed, _req = await perm_svc.request_and_wait(
-                session, tool_name, input_data, aredis=self.redis, always_rules=always_rules
+                session, tool_name, input_data, aredis=self.redis, always_rules=rule_strings
             )
         finally:
             await self._set_status(session, Session.Status.RUNNING)
         if answer in ("allow", "allow_always"):
-            return PermissionResultAllow(updated_input=effective if changed else None)
+            kwargs: dict = {}
+            if changed:
+                kwargs["updated_input"] = effective
+            # allow_always: aplica las reglas sugeridas EN VIVO (mismo turno/sesión)
+            # para que la próxima invocación que case no vuelva a preguntar.
+            if answer == "allow_always" and suggestions:
+                kwargs["updated_permissions"] = suggestions
+            return PermissionResultAllow(**kwargs)
         return PermissionResultDeny(message=DENY_MSG if answer == "deny" else TIMEOUT_MSG)
 
     @sync_to_async

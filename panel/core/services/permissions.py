@@ -77,8 +77,14 @@ def apply_answer(
 
 
 def _persist_always_rules(req: PermissionRequest, rules: list[str]) -> None:
-    """Añade las reglas a la allowlist de la policy del proyecto y re-renderiza,
-    para que futuras invocaciones que casen no vuelvan a preguntar."""
+    """Añade las reglas a la allowlist de la policy del proyecto para que futuras
+    SESIONES no vuelvan a preguntar (el worker pasa `allowed_tools` desde la DB).
+    En la sesión ACTUAL el efecto lo da `updated_permissions` (SDK). El re-render
+    de settings.json es best-effort: el worker corre como `agents` y no puede
+    invocar el helper de render (sudo es solo para `panel`); la DB es la fuente
+    de verdad de todos modos."""
+    import logging
+
     from panel.core.services import privileged
 
     policy = req.session.project.permission_policy
@@ -91,7 +97,12 @@ def _persist_always_rules(req: PermissionRequest, rules: list[str]) -> None:
     if changed:
         policy.allowed_tools = allowed
         policy.save(update_fields=["allowed_tools", "updated_at"])
-    privileged.run_render()
+    try:
+        privileged.run_render()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("session_worker").info(
+            "render tras allow_always no disponible (%s); DB ya persistida", exc
+        )
 
 
 def expire_pending(session: Session) -> int:
