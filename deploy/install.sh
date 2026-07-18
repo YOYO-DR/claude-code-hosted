@@ -12,16 +12,6 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -z "${LE_EMAIL:-}" ]]; then
-  if [[ -t 0 ]]; then
-    read -rp "Email de contacto para Let's Encrypt: " LE_EMAIL
-  else
-    echo "Falta LE_EMAIL en el entorno (email de contacto para Let's Encrypt) y no hay TTY para pedirlo." >&2
-    exit 1
-  fi
-fi
-[[ -z "$LE_EMAIL" ]] && { echo "LE_EMAIL no puede estar vacio." >&2; exit 1; }
-
 echo "==> Paquetes base"
 apt-get update -qq
 apt-get install -y -qq \
@@ -77,10 +67,18 @@ ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
 
-echo "==> LE_EMAIL persistido para compose.infra.yml"
+echo "==> Directorio de secretos de la plataforma"
 install -d -m 0700 /etc/panel
-printf 'LE_EMAIL=%s\n' "$LE_EMAIL" > /etc/panel/traefik.env
-chmod 600 /etc/panel/traefik.env
+
+echo "==> Cert de origen (Cloudflare Origin CA)"
+# El cert (cert.pem) + su key (key.pem) viven en /etc/panel/origin y los sirve
+# Traefik como default cert (ver deploy/traefik/dynamic/tls.yml). Se generan
+# fuera de este script (via API de Cloudflare Origin CA); aqui solo se asegura
+# el directorio. Si faltan, se avisa pero no se aborta (util en primer arranque).
+install -d -m 0700 /etc/panel/origin
+if [[ ! -f /etc/panel/origin/cert.pem || ! -f /etc/panel/origin/key.pem ]]; then
+  echo "  AVISO: falta /etc/panel/origin/{cert,key}.pem — Traefik servira su cert autofirmado hasta que se instalen." >&2
+fi
 
 echo "==> Password de Postgres"
 if [[ ! -f /etc/panel/postgres_password.txt ]]; then

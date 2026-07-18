@@ -5,18 +5,13 @@ services:
     image: traefik:v3.3
     restart: unless-stopped
     network_mode: host
-    env_file:
-      - /etc/panel/traefik.env
     command:
       - --configFile=/etc/traefik/traefik.yml
-      - --certificatesresolvers.le.acme.email=${LE_EMAIL}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - /etc/panel/ttyd.htpasswd:/etc/traefik/secrets/ttyd.htpasswd:ro
-      - traefik_certs:/letsencrypt
+      - /etc/panel/origin:/etc/traefik/origin:ro
 
   postgres:
     image: postgres:16
@@ -42,7 +37,6 @@ services:
       - redis_data:/data
 
 volumes:
-  traefik_certs:
   postgres_data:
   redis_data:
 

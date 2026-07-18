@@ -1,8 +1,16 @@
 # INFRA.md
 
 VPS: Ubuntu 24.04.4 LTS, 4 vCPU, 7.8 GiB RAM, 96 GB disco (~90 GB libres al
-arranque de Fase 0). Dominio: `claude-code-hosted.yoyodr.dev` (Cloudflare,
-proxied).
+arranque de Fase 0). IP: `169.58.33.122`. Dominio:
+`claude-code-hosted.yoyodr.dev` (Cloudflare, **proxied**, modo Full strict).
+
+## TLS
+
+- Browser → Cloudflare: cert del edge de Cloudflare (Google Trust Services,
+  `*.yoyodr.dev`). Gestionado por Cloudflare, nada que hacer.
+- Cloudflare → origen: **Cloudflare Origin CA cert** (15 años, expira
+  2041-07-14) en `/etc/panel/origin/{cert,key}.pem`, servido por Traefik como
+  default cert. Ver `DECISIONS.md` D5. Sin Let's Encrypt.
 
 ## Puertos reservados por la plataforma
 

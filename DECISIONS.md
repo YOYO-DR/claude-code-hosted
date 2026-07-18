@@ -69,8 +69,37 @@ plan) documentado en `INFRA.md`, con una asignación simple slug→puerto en
 `ttyd@.service` resuelve. Revisar si esto necesita algo más sofisticado en
 Fase 2 cuando exista CRUD real de proyectos.
 
-### D5 — Email de Let's Encrypt: pedido por `install.sh`, no hardcodeado
+### D5 — TLS: Cloudflare Origin CA en vez de Let's Encrypt (dominio proxied)
 
-`install.sh` exige la variable `LE_EMAIL` (prompt interactivo si no está en
-el entorno) en vez de tener el email escrito en el script o en el repo.
-Valor a usar en este VPS: `yoiner3216988182@gmail.com`.
+El dominio `claude-code-hosted.yoyodr.dev` está **proxied por Cloudflare**
+(nube naranja): `dig` devuelve IPs de Cloudflare (104.21.x / 172.67.x), no la
+del VPS. Consecuencias:
+
+- El browser ya recibe TLS válido del **edge de Cloudflare** (cert de Google
+  Trust Services para `*.yoyodr.dev`). No hace falta emitir nada para el
+  tramo browser→CF.
+- El tramo **CF→origen** con Cloudflare en modo *Full (strict)* exige que el
+  origen presente un cert que CF confíe. Con solo el `TRAEFIK DEFAULT CERT`
+  autofirmado, CF devuelve **HTTP 526**.
+- Let's Encrypt HTTP-01 **no aplica**: LE conecta contra las IPs de
+  Cloudflare, no contra el origen, y CF intercepta 80/443.
+
+Solución adoptada (decisión de Yoiner): **Cloudflare Origin CA certificate**.
+Se genera vía API (`POST /certificates`, `request_type: origin-rsa`,
+`requested_validity: 5475` = 15 años) usando un API token de Cloudflare con
+permiso `Zone → SSL and Certificates → Edit` sobre la zona `yoyodr.dev`. La
+private key se genera en el VPS (`/etc/panel/origin/key.pem`, nunca sale de
+ahí); solo el CSR viaja a CF y vuelve firmado. El cert queda en
+`/etc/panel/origin/cert.pem`.
+
+Traefik lo sirve como **default certificate** vía file provider
+(`deploy/traefik/dynamic/tls.yml`), montando `/etc/panel/origin` en el
+contenedor. Se elimina toda la config ACME/Let's Encrypt del compose
+(`--certificatesresolvers.le.*`, el volumen `traefik_certs`, el `env_file` de
+`LE_EMAIL`) y `render_routes.py` usa `tls: {}` (cert default) en vez de
+`certResolver: le`.
+
+Cero renovaciones durante 15 años. Cloudflare queda en Full (strict).
+
+Esto reemplaza por completo la pregunta original wildcard-vs-HTTP-01 (D3) y la
+idea de `LE_EMAIL` en `install.sh`.
