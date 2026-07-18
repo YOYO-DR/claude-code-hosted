@@ -17,6 +17,8 @@
     </p>
   {% endif %}
 
+  <div id="perms"></div>
+
   <div id="stream">
     {% for ev in events %}
       <div class="ev {{ ev.type }}" data-seq="{{ ev.seq }}">[{{ ev.seq }}] {{ ev.type }}: {{ ev.payload }}</div>
@@ -68,9 +70,44 @@
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.channel === "out") render(m.event);
+        else if (m.channel === "perm") renderPerm(m.event);
       };
     }
     connect();
+
+    const perms = document.getElementById("perms");
+    function csrf() {
+      return document.cookie.split("; ").find(c => c.startsWith("csrftoken="))?.split("=")[1] || "";
+    }
+    function renderPerm(req) {
+      if (document.getElementById("perm-" + req.id)) return;
+      const box = document.createElement("div");
+      box.id = "perm-" + req.id;
+      box.className = "ev";
+      box.style.borderColor = "#e0a800";
+      box.innerHTML = "<strong>⏳ Aprobación requerida</strong> <code>" + req.tool + "</code><br>" +
+        "<span class='muted'><code></code></span><br>";
+      box.querySelector("code:last-of-type").textContent = req.input_preview || "";
+      ["allow", "deny", "allow_always"].forEach(ans => {
+        const b = document.createElement("button");
+        b.textContent = { allow: "Permitir", deny: "Denegar", allow_always: "Permitir siempre" }[ans];
+        b.style.marginRight = ".4rem";
+        b.onclick = async () => {
+          box.querySelectorAll("button").forEach(x => x.disabled = true);
+          const res = await fetch("/permissions/" + req.id + "/resolve/", {
+            method: "POST",
+            headers: { "X-CSRFToken": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+            body: "answer=" + ans,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data.ok) box.remove();
+          else if (data.conflict) { box.style.opacity = ".5"; box.querySelector("strong").textContent = "Ya respondida"; }
+          else box.querySelectorAll("button").forEach(x => x.disabled = false);
+        };
+        box.appendChild(b);
+      });
+      perms.appendChild(box);
+    }
 
     document.getElementById("chat").addEventListener("submit", (e) => {
       e.preventDefault();

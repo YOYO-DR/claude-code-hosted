@@ -58,6 +58,9 @@ class Project(TimestampedModel):
     name = models.CharField(max_length=200)
     path = models.CharField(max_length=500)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+    # Timeout de aprobaciones de permisos (§4.2). null = usa el default global
+    # settings.PERMISSION_TIMEOUT_SECONDS (15 min).
+    permission_timeout_seconds = models.PositiveIntegerField(null=True, blank=True)
     telegram_topic_id = models.IntegerField(null=True, blank=True)
     github_repo = models.CharField(max_length=200, null=True, blank=True)
     model_profile = models.ForeignKey(

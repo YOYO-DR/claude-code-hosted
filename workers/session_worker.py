@@ -20,18 +20,51 @@ django.setup()
 
 import redis.asyncio as aioredis  # noqa: E402
 from asgiref.sync import sync_to_async  # noqa: E402
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, PermissionMode  # noqa: E402
+from claude_agent_sdk import (  # noqa: E402
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    PermissionMode,
+    PermissionResultAllow,
+    PermissionResultDeny,
+)
 from django.conf import settings  # noqa: E402
 from django.utils import timezone  # noqa: E402
 
 from panel.core import bus  # noqa: E402
 from panel.core.models import Event, Session  # noqa: E402
 from panel.core.services import events as event_svc  # noqa: E402
+from panel.core.services import permissions as perm_svc  # noqa: E402
 from panel.core.services import serialize  # noqa: E402
 from panel.core.services.model_env import render_env  # noqa: E402
 
 log = logging.getLogger("session_worker")
 HEARTBEAT_INTERVAL = 5  # segundos
+
+DENY_MSG = (
+    "Permiso denegado por el operador. No reintentes esta acción; continúa con "
+    "lo que no la requiera o documenta el bloqueo en NOTES.md."
+)
+TIMEOUT_MSG = (
+    "La solicitud de aprobación expiró sin respuesta. Continúa con lo que no "
+    "requiera este permiso o deja el trabajo limpio y documentado en NOTES.md."
+)
+
+
+def _suggested_allow_rules(ctx: object) -> list[str]:
+    """Reglas 'allow' scopeadas que sugiere el SDK para este tool use (p.ej.
+    `Bash(git push:*)`), para persistir en `allow_always`. Formato settings.json:
+    `ToolName(ruleContent)`."""
+    rules: list[str] = []
+    for upd in getattr(ctx, "suggestions", None) or []:
+        if getattr(upd, "type", None) != "addRules" or getattr(upd, "behavior", None) != "allow":
+            continue
+        for r in getattr(upd, "rules", None) or []:
+            tool = getattr(r, "tool_name", None)
+            if not tool:
+                continue
+            content = getattr(r, "rule_content", None)
+            rules.append(f"{tool}({content})" if content else tool)
+    return rules
 
 
 def redis_exceptions() -> tuple[type[BaseException], ...]:
@@ -52,10 +85,14 @@ class Worker:
         self.sid = sid
         self.redis = aioredis.from_url(settings.REDIS_URL)
         self._seq = 0
+        self._session: Session | None = None
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
         session = await self._load_session()
+        self._session = session
+        # Requests pendientes de un worker anterior jamás deben quedar aprobables.
+        await sync_to_async(perm_svc.expire_pending)(session)
         self._seq = await sync_to_async(event_svc.initial_seq)(session)
         options = await self._build_options(session)
 
@@ -168,15 +205,38 @@ class Worker:
         policy = await sync_to_async(lambda: project.permission_policy)()
         profile = await sync_to_async(lambda: project.model_profile)()
         env = await sync_to_async(render_env)(profile)
-        mode: PermissionMode = "bypassPermissions" if policy.mode == "auto" else "default"
+        approve = policy.mode == "approve"
+        mode: PermissionMode = "default" if approve else "bypassPermissions"
         return ClaudeAgentOptions(
             cwd=project.path,
             permission_mode=mode,
             allowed_tools=list(policy.allowed_tools or []),
+            # El callback solo se consulta en zona indecisa (ni allow ni deny
+            # obligatoria). En modo auto (bypass) el SDK ni lo llama.
+            can_use_tool=self._can_use_tool if approve else None,
             model=profile.model or None,
             env=env,
             setting_sources=["user", "project"],
         )
+
+    async def _can_use_tool(
+        self, tool_name: str, input_data: dict, ctx: object
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """§4.2: crea PermissionRequest, publica en :perm, espera la respuesta y
+        resuelve. La reescritura (si aplica) va en updated_input."""
+        session = self._session
+        assert session is not None  # seteado en run() antes de cualquier turno
+        always_rules = _suggested_allow_rules(ctx)
+        await self._set_status(session, Session.Status.WAITING_APPROVAL)
+        try:
+            answer, effective, changed, _req = await perm_svc.request_and_wait(
+                session, tool_name, input_data, aredis=self.redis, always_rules=always_rules
+            )
+        finally:
+            await self._set_status(session, Session.Status.RUNNING)
+        if answer in ("allow", "allow_always"):
+            return PermissionResultAllow(updated_input=effective if changed else None)
+        return PermissionResultDeny(message=DENY_MSG if answer == "deny" else TIMEOUT_MSG)
 
     @sync_to_async
     def _load_session(self) -> Session:

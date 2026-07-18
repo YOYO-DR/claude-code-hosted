@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import redis
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from panel.core.models import Project, Session
+from panel.core.models import PermissionRequest, Project, Session
+from panel.core.services import permissions as perm_svc
 from panel.core.services import sessions as session_svc
 from panel.ui.forms import LoginForm
 
@@ -63,7 +66,8 @@ def session_detail(request, sid):
         return redirect("login")
     session = get_object_or_404(Session.objects.select_related("project__model_profile"), id=sid)
     events = session.events.order_by("seq")
-    last_seq = events.last().seq if events.exists() else 0
+    last_event = events.last()
+    last_seq = last_event.seq if last_event is not None else 0
     return render(
         request,
         "ui/session_detail.html",
@@ -94,3 +98,35 @@ def session_stop(request, sid):
     session = get_object_or_404(Session, id=sid)
     session_svc.stop_session(session)
     return redirect("session_detail", sid=session.id)
+
+
+@login_required
+def permission_queue(request):
+    if not request.user.is_verified():
+        return redirect("login")
+    pending = (
+        PermissionRequest.objects.filter(status=PermissionRequest.Status.PENDING)
+        .select_related("session__project")
+        .order_by("expires_at")
+    )
+    return render(request, "ui/permission_queue.html", {"pending": pending})
+
+
+@login_required
+@require_POST
+def permission_resolve(request, request_id):
+    """Reclama la respuesta vía SET NX (§4.1). El primero gana; si otro origen ya
+    respondió, devuelve conflicto. El worker (único escritor) transiciona la fila."""
+    if not request.user.is_verified():
+        return JsonResponse({"error": "unauthorized"}, status=403)
+    answer = request.POST.get("answer")
+    if answer not in {"allow", "deny", "allow_always"}:
+        return JsonResponse({"error": "invalid answer"}, status=400)
+    client = redis.from_url(settings.REDIS_URL)
+    try:
+        claimed = perm_svc.claim_answer_sync(client, str(request_id), answer)
+    except redis.RedisError:
+        return JsonResponse({"error": "bus unavailable"}, status=503)
+    finally:
+        client.close()
+    return JsonResponse({"ok": claimed, "conflict": not claimed})

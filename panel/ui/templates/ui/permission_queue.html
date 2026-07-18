@@ -1,0 +1,47 @@
+{% extends "ui/base.html" %}
+{% block title %}Aprobaciones pendientes · Panel{% endblock %}
+{% block content %}
+  <h1>Aprobaciones pendientes</h1>
+  <table>
+    <thead><tr><th>Proyecto</th><th>Herramienta</th><th>Preview</th><th>Expira</th><th>Acción</th></tr></thead>
+    <tbody>
+      {% for req in pending %}
+        <tr data-id="{{ req.id }}">
+          <td>{{ req.session.project.slug }}</td>
+          <td><code>{{ req.tool }}</code></td>
+          <td class="muted"><code>{{ req.input_preview|truncatechars:120 }}</code></td>
+          <td class="muted">{{ req.expires_at|date:"H:i:s" }}</td>
+          <td>
+            <button data-answer="allow">Permitir</button>
+            <button data-answer="deny">Denegar</button>
+            <button data-answer="allow_always">Permitir siempre</button>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Nada pendiente.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <script>
+    function csrf() {
+      return document.cookie.split("; ").find(c => c.startsWith("csrftoken="))?.split("=")[1] || "";
+    }
+    document.querySelectorAll("button[data-answer]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const row = btn.closest("tr");
+        const id = row.dataset.id;
+        row.querySelectorAll("button").forEach(b => b.disabled = true);
+        const res = await fetch("/permissions/" + id + "/resolve/", {
+          method: "POST",
+          headers: { "X-CSRFToken": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+          body: "answer=" + encodeURIComponent(btn.dataset.answer),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) row.remove();
+        else if (data.conflict) { row.style.opacity = ".5"; row.querySelector("td").textContent += " (ya respondida)"; }
+        else row.querySelectorAll("button").forEach(b => b.disabled = false);
+      });
+    });
+  </script>
+{% endblock %}
