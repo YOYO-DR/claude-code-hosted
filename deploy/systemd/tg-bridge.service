@@ -1,0 +1,16 @@
+[Unit]
+Description=Puente Telegram (psubscribe perm → sendMessage; perm:resolved → edit)
+After=network.target panel-infra.service
+Wants=panel-infra.service
+
+[Service]
+User=panel
+Group=panel
+WorkingDirectory=/opt/panel
+EnvironmentFile=/etc/panel/panel.env
+ExecStart=/opt/panel/.venv/bin/python -m workers.tg_bridge
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

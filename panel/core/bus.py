@@ -20,6 +20,12 @@ def key_answer(uuid: str) -> str:
     return f"perm:{uuid}:answer"
 
 
+def key_perm_resolved() -> str:
+    # Canal global: el worker publica {request_id, outcome} al resolver un
+    # permiso; el tg_bridge edita el mensaje de Telegram correspondiente.
+    return "perm:resolved"
+
+
 def key_heartbeat(sid: str) -> str:
     return f"worker:{sid}:heartbeat"
 

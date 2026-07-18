@@ -168,4 +168,13 @@ async def request_and_wait(
     answer = await _wait_answer(aredis, str(req.id), timeout_s, poll_interval)
     final = answer if answer in {"allow", "allow_always", "deny"} else "timeout"
     await sync_to_async(apply_answer)(req, final, always_rules)
+    # Notifica la resolución (cualquier origen) para que el tg_bridge edite el
+    # mensaje de Telegram y quite el teclado (§4.6). Best-effort.
+    try:
+        await aredis.publish(
+            bus.key_perm_resolved(),
+            json.dumps({"request_id": str(req.id), "outcome": final}),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return final, effective, changed, req

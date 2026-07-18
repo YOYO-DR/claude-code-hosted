@@ -122,3 +122,8 @@ class PermissionRequestAdmin(admin.ModelAdmin):
 @admin.register(models.PortRegistry)
 class PortRegistryAdmin(admin.ModelAdmin):
     list_display = ("port", "project", "purpose", "status")
+
+
+@admin.register(models.Config)
+class ConfigAdmin(admin.ModelAdmin):
+    list_display = ("key", "value")

@@ -183,6 +183,27 @@ class PermissionRequest(TimestampedModel):
         return f"{self.tool} [{self.status}]"
 
 
+class Config(TimestampedModel):
+    """Config key-value de plataforma (Fase 4): secret del webhook de Telegram,
+    chat_id del grupo, topic 'sistema'. No para secretos de modelo (esos van
+    cifrados en ModelProfile)."""
+
+    key = models.CharField(max_length=100, primary_key=True)
+    value = models.TextField(blank=True)
+
+    def __str__(self) -> str:
+        return self.key
+
+    @classmethod
+    def get(cls, key: str, default: str | None = None) -> str | None:
+        row = cls.objects.filter(key=key).first()
+        return row.value if row else default
+
+    @classmethod
+    def set(cls, key: str, value: str) -> None:
+        cls.objects.update_or_create(key=key, defaults={"value": value})
+
+
 class PortRegistry(TimestampedModel):
     class Status(models.TextChoices):
         ACTIVE = "active"

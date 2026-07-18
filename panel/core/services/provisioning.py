@@ -8,14 +8,40 @@ sudo — ver panel.core.services.privileged."""
 
 from __future__ import annotations
 
-from panel.core.models import Project, Session
+import logging
+
+from django.conf import settings
+
+from panel.core.models import Config, Project, Session
 from panel.core.services import privileged
 from panel.core.services import sessions as session_svc
+from panel.core.services import telegram as tg
+
+log = logging.getLogger("provisioning")
 
 
 def provision_project(project: Project) -> None:
-    """Directorio + git init + chown agents + render de todos. Idempotente."""
+    """Directorio + git init + chown agents + render de todos. Idempotente.
+    Además crea el topic de Telegram del proyecto (§4.6), best-effort."""
     privileged.run_provision(project.slug, project.path)
+    ensure_topic(project)
+
+
+def ensure_topic(project: Project) -> None:
+    """Crea el forum topic del proyecto y guarda telegram_topic_id. Best-effort:
+    si Telegram no está configurado o falla, no bloquea el provisioning."""
+    if project.telegram_topic_id or not settings.TELEGRAM_BOT_TOKEN:
+        return
+    chat_id = Config.get("tg_chat_id")
+    if not chat_id:
+        return
+    try:
+        tid = tg.create_forum_topic(chat_id, project.name or project.slug)
+    except tg.TelegramError as exc:
+        log.warning("no se pudo crear topic para %s: %s", project.slug, exc)
+        return
+    project.telegram_topic_id = tid
+    project.save(update_fields=["telegram_topic_id", "updated_at"])
 
 
 def archive_project(project: Project) -> None:

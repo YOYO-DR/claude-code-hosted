@@ -117,3 +117,12 @@ AGENTS_HOME = Path(_env("PANEL_AGENTS_HOME", "/home/agents"))
 
 # Timeout por defecto de aprobaciones de permisos (segundos). Fase 3.
 PERMISSION_TIMEOUT_SECONDS = int(_env("PANEL_PERMISSION_TIMEOUT", "900"))
+
+# Telegram (Fase 4). Token y allowlist vienen del entorno; el chat_id del grupo,
+# el secret del webhook y el topic "sistema" se capturan/generan y se guardan en
+# el modelo Config. TELEGRAM_USER_IDS: enteros separados por coma (allowlist).
+TELEGRAM_BOT_TOKEN = _env("PANEL_TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_USER_IDS = [
+    int(x) for x in _env("PANEL_TELEGRAM_USER_IDS", "").replace(" ", "").split(",") if x
+]
+PUBLIC_BASE_URL = _env("PANEL_PUBLIC_BASE_URL", "https://claude-code-hosted.yoyodr.dev")

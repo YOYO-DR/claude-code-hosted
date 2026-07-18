@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import json
+
 import redis
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from panel.core.models import PermissionRequest, Project, Session
+from panel.core.models import Config, PermissionRequest, Project, Session
 from panel.core.services import permissions as perm_svc
 from panel.core.services import sessions as session_svc
+from panel.core.services import telegram as tg
 from panel.ui.forms import LoginForm
 
 
@@ -130,3 +134,49 @@ def permission_resolve(request, request_id):
     finally:
         client.close()
     return JsonResponse({"ok": claimed, "conflict": not claimed})
+
+
+@csrf_exempt
+@require_POST
+def tg_webhook(request):
+    """Webhook de Telegram (§4.6). Valida el secret token, filtra por allowlist,
+    procesa SOLO callback_query (los `message` sueltos se ignoran). Resuelve el
+    permiso con SET NX y responde el callback (doble tap → 'ya respondida')."""
+    secret = Config.get("tg_webhook_secret")
+    got = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if not secret or got != secret:
+        return HttpResponse(status=403)
+    try:
+        update = json.loads(request.body)
+    except (json.JSONDecodeError, TypeError):
+        return HttpResponse(status=200)  # nada que hacer, pero no reintentar
+
+    cq = update.get("callback_query")
+    if not cq:
+        return HttpResponse(status=200)  # message suelto u otro update → ignorar
+
+    from_id = (cq.get("from") or {}).get("id")
+    if from_id not in settings.TELEGRAM_USER_IDS:
+        return HttpResponse(status=200)  # fuera de allowlist → ignorar en silencio
+
+    parsed = tg.parse_callback_data(cq.get("data", ""))
+    if parsed is None:
+        return HttpResponse(status=200)
+    answer, request_id = parsed
+
+    client = redis.from_url(settings.REDIS_URL)
+    try:
+        claimed = perm_svc.claim_answer_sync(client, request_id, answer)
+    except (redis.RedisError, ValueError):
+        claimed = False
+    finally:
+        client.close()
+
+    try:
+        if claimed:
+            tg.answer_callback_query(cq["id"], f"Registrado: {answer}")
+        else:
+            tg.answer_callback_query(cq["id"], "Ya fue respondida.")
+    except tg.TelegramError:
+        pass
+    return HttpResponse(status=200)
