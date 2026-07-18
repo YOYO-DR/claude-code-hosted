@@ -127,7 +127,10 @@ PANEL_REDIS_URL=redis://127.0.0.1:6379/0
 PANEL_PROJECTS_ROOT=/srv/projects
 PANEL_AGENTS_HOME=/home/agents
 EOF
-  chmod 600 /etc/panel/panel.env
+  # root:panel 640: el usuario panel lo lee (migrate/collectstatic manual);
+  # los servicios systemd lo leen como root antes de bajar de privilegios.
+  chown root:panel /etc/panel/panel.env
+  chmod 640 /etc/panel/panel.env
 fi
 
 echo "==> sudoers para el panel (solo systemctl de claude-session@*)"
