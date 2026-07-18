@@ -1,0 +1,15 @@
+# PostgreSQL
+# ------------------------------------------------------------------------------
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=plantilla_django_react
+POSTGRES_USER=debug
+POSTGRES_PASSWORD=debug
+
+# pgbouncer
+# ------------------------------------------------------------------------------
+PGB_POSTGRES_HOST=pgbouncer
+PGB_POSTGRES_PORT=6432
+PGB_POSTGRES_DB=${POSTGRES_DB}
+PGB_POSTGRES_USER=${POSTGRES_USER}
+PGB_POSTGRES_PASSWORD=${POSTGRES_PASSWORD}

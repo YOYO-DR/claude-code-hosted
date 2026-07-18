@@ -1,0 +1,188 @@
+volumes:
+  production_traefik: {}
+  production_django_media: {}
+  production_django_logs: {}
+
+services:
+  django_plantilla: &django
+    build:
+      context: ./backend
+      dockerfile: ./compose/production/django/Dockerfile
+    image: plantilla_django_react_production_django
+    volumes:
+      - production_django_media:/app/apps/media
+      - production_django_logs:/app/logs
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    command: /start
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+        limits:
+          cpus: ${DJANGO_CPU:-1}
+          memory: ${DJANGO_RAM:-1g}
+    networks:
+      - dokploy-network
+      - default
+
+  pgbouncer_plantilla:
+    build:
+      context: ./backend
+      dockerfile: ./compose/production/pgbouncer/Dockerfile
+    image: plantilla_django_react_production_pgbouncer
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    networks:
+      - dokploy-network
+      - default
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.1'
+          memory: 123M
+        limits:
+          cpus: ${PGBOUNCER_CPU:-1}
+          memory: ${PGBOUNCER_RAM:-1g}
+
+  redis_plantilla:
+    image: docker.io/redis:7.2
+    networks:
+      - dokploy-network
+      - default
+
+  traefik_plantilla:
+    build:
+      context: ./backend
+      dockerfile: ./compose/production/traefik/Dockerfile
+    image: plantilla_django_react_production_traefik
+    depends_on:
+      - django_plantilla
+    volumes:
+      - production_traefik:/etc/traefik/acme
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    networks:
+      - dokploy-network
+      - default
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.1'
+          memory: 123M
+        limits:
+          cpus: ${TRAEFIK_CPU:-1}
+          memory: ${TRAEFIK_RAM:-1g}
+
+  celeryworker_plantilla:
+    <<: *django
+    image: plantilla_django_react_production_celeryworker
+    command: /start-celeryworker
+    ports: []
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    depends_on:
+      - pgbouncer_plantilla
+      - redis_plantilla
+    deploy:
+      replicas: ${CANT_WORKERS_CELERY:-2}
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+        limits:
+          cpus: ${CELERYWORKER_CPU:-1}
+          memory: ${CELERYWORKER_RAM:-1g}
+    networks:
+      - dokploy-network
+      - default
+
+  celerybeat_plantilla:
+    <<: *django
+    image: plantilla_django_react_production_celerybeat
+    restart: unless-stopped
+    volumes:
+      - production_django_media:/app/apps/media
+    command: /start-celerybeat
+    env_file:
+      - ./.env
+    depends_on:
+      - pgbouncer_plantilla
+      - redis_plantilla
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+        limits:
+          cpus: ${CELERYBEAT_CPU:-1}
+          memory: ${CELERYBEAT_RAM:-1g}
+    networks:
+      - dokploy-network
+      - default
+
+  flower_plantilla:
+    <<: *django
+    image: plantilla_django_react_production_flower
+    command: /start-flower
+    env_file:
+      - ./.env
+    depends_on:
+      - celeryworker_plantilla
+    networks:
+      - dokploy-network
+      - default
+
+  nginx_plantilla:
+    build:
+      context: ./backend
+      dockerfile: ./compose/production/nginx/Dockerfile
+    image: plantilla_django_react_production_nginx
+    depends_on:
+      - django_plantilla
+    volumes:
+      - production_django_media:/usr/share/nginx/media:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.1'
+          memory: 123M
+        limits:
+          cpus: ${NGINX_CPU:-1}
+          memory: ${NGINX_RAM:-1g}
+    networks:
+      - dokploy-network
+      - default
+
+  frontend_plantilla:
+    build:
+      context: ./frontend
+      dockerfile: ./compose/production/Dockerfile
+      args:
+        - VITE_API_URL=${VITE_API_URL}
+    image: plantilla_django_react_production_frontend
+    restart: unless-stopped
+    depends_on:
+      - django_plantilla
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+        limits:
+          cpus: ${FRONTEND_CPU:-1}
+          memory: ${FRONTEND_RAM:-1g}
+    networks:
+      - dokploy-network
+      - default
+
+networks:
+  dokploy-network:
+    external: true
+

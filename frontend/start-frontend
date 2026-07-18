@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+echo "Waiting for Django backend to be ready..."
+i=0
+until curl -s --max-time 2 -o /dev/null -w "%{http_code}" http://django:8000/ 2>/dev/null | grep -qE "^[0-9]+$" || [ $i -ge 60 ]; do
+  i=$((i+1))
+  echo "  ...waiting ($i/60)"
+  sleep 1
+done
+
+if [ $i -ge 60 ]; then
+  echo "ERROR: Django backend not available after 60s"
+  exit 1
+fi
+
+echo "Backend is available, starting Vite..."
+exec pnpm run dev -- --host

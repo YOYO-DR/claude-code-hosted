@@ -1,0 +1,11 @@
+- main [ref=e3]:
+  - heading "Login" [level=1] [ref=e4]
+  - paragraph [ref=e5]: Prueba de CORS + DRF SimpleJWT. Inicia sesión con un superusuario.
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - text: Email
+      - textbox "Email" [ref=e8]
+    - generic [ref=e9]:
+      - text: Password
+      - textbox "Password" [ref=e10]
+    - button "Entrar" [ref=e11]

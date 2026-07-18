@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+if [ -z "${PGB_POSTGRES_USER}" ]; then
+    base_postgres_image_default_user='postgres'
+    export PGB_POSTGRES_USER="${base_postgres_image_default_user}"
+fi
+export DATABASE_URL="postgres://${PGB_POSTGRES_USER}:${PGB_POSTGRES_PASSWORD}@${PGB_POSTGRES_HOST}:${PGB_POSTGRES_PORT}/${POSTGRES_DB}"
+
+wait-for-it "${PGB_POSTGRES_HOST}:${PGB_POSTGRES_PORT}" -t 30
+
+>&2 echo 'PostgreSQL is available'
+
+exec "$@"
