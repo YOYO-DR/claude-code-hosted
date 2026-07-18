@@ -18,6 +18,7 @@ async def _worker():
     w.sid = "s"
     w.redis = None  # request_and_wait está mockeado; no se usa
     w._session = object()
+    w._slug = ""  # vacío → el hook de puertos se salta
 
     async def _noop_status(*a, **k):
         return None

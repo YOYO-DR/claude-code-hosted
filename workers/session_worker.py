@@ -31,10 +31,12 @@ from claude_agent_sdk import (  # noqa: E402
 from django.conf import settings  # noqa: E402
 from django.utils import timezone  # noqa: E402
 
+from mcp_ports import server as ports_mcp  # noqa: E402
 from panel.core import bus  # noqa: E402
 from panel.core.models import Event, Session  # noqa: E402
 from panel.core.services import events as event_svc  # noqa: E402
 from panel.core.services import permissions as perm_svc  # noqa: E402
+from panel.core.services import ports as ports_svc  # noqa: E402
 from panel.core.services import serialize  # noqa: E402
 from panel.core.services.model_env import render_env  # noqa: E402
 
@@ -100,6 +102,7 @@ class Worker:
         self.redis = aioredis.from_url(settings.REDIS_URL)
         self._seq = 0
         self._session: Session | None = None
+        self._slug: str = ""
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
@@ -219,12 +222,18 @@ class Worker:
         policy = await sync_to_async(lambda: project.permission_policy)()
         profile = await sync_to_async(lambda: project.model_profile)()
         env = await sync_to_async(render_env)(profile)
+        self._slug = project.slug
         approve = policy.mode == "approve"
         mode: PermissionMode = "default" if approve else "bypassPermissions"
+        # MCP de puertos in-process (§4.5): tokens/DB nunca a disco. Las tools
+        # se auto-permiten (son la vía sancionada para obtener puertos).
+        ports_server = ports_mcp.build_server(project.slug, self.sid)
+        allowed = list(policy.allowed_tools or []) + ports_mcp.TOOL_NAMES
         return ClaudeAgentOptions(
             cwd=project.path,
             permission_mode=mode,
-            allowed_tools=list(policy.allowed_tools or []),
+            allowed_tools=allowed,
+            mcp_servers={"ports": ports_server},
             # El callback solo se consulta en zona indecisa (ni allow ni deny
             # obligatoria). En modo auto (bypass) el SDK ni lo llama.
             can_use_tool=self._can_use_tool if approve else None,
@@ -240,6 +249,16 @@ class Worker:
         resuelve. La reescritura (si aplica) va en updated_input."""
         session = self._session
         assert session is not None  # seteado en run() antes de cualquier turno
+        # Hook de puertos (§4.2 task 4): binds a puertos de otro proyecto →
+        # reescribe al propio o deniega. Solo Bash.
+        if tool_name == "Bash" and self._slug:
+            action, payload = await sync_to_async(ports_svc.guard_command)(
+                self._slug, input_data.get("command", "")
+            )
+            if action == "deny":
+                return PermissionResultDeny(message=payload or DENY_MSG)
+            if action == "rewrite" and payload is not None:
+                input_data = {**input_data, "command": payload}
         suggestions = _allow_suggestions(ctx)
         rule_strings = _rules_to_strings(suggestions)
         await self._set_status(session, Session.Status.WAITING_APPROVAL)
