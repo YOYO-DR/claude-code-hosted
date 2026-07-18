@@ -29,5 +29,25 @@ punto de entrada) y 22 (SSH).
 
 ## RAM/CPU base (Gate 0)
 
-_Pendiente de completar tras correr el checklist de Gate 0 (8 sesiones tmux
-con `claude` idle)._
+Medido 2026-07-18 en el VPS (4 vCPU / 7.94 GB RAM), infra levantada:
+
+| Estado                                   | RAM usada | Disponible |
+|------------------------------------------|-----------|------------|
+| Infra sola (Traefik+PG+Redis) + shell    | ~764 MB   | ~7.1 GB    |
+| Infra + 1 `claude` idle                  | ~801 MB   | ~7.1 GB    |
+| Infra + **9 `claude` idle** (escotilla)  | ~1730 MB  | ~6.2 GB    |
+
+- ~116 MB incrementales por sesión `claude` idle en tmux.
+- Load average con 8 sesiones recién lanzadas: ~0.69 sobre 4 vCPU; baja a ~0
+  cuando terminan de renderizar (idle real).
+- Conclusión: el VPS sostiene 8 sesiones de escotilla simultáneas con >6 GB
+  libres. Nota: la escotilla (tmux+`claude` CLI) es independiente de los
+  workers del Agent SDK (Fase 1); esta medición es solo del camino manual.
+
+## Verificaciones de aislamiento (Gate 0)
+
+- `ss -tlnp`: Postgres (5432) y Redis (6379) escuchan solo en `127.0.0.1`
+  (docker-proxy), nunca en `0.0.0.0`.
+- Desde el exterior (IP pública `169.58.33.122`): 5432 y 6379
+  cerrados/filtrados; solo 22 (SSH) y 443 (Traefik) abiertos. `ufw` activo
+  permitiendo únicamente OpenSSH, 80, 443.
