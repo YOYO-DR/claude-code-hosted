@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import signal
+from dataclasses import replace
 
 import django
 
@@ -252,10 +253,13 @@ class Worker:
             kwargs: dict = {}
             if changed:
                 kwargs["updated_input"] = effective
-            # allow_always: aplica las reglas sugeridas EN VIVO (mismo turno/sesión)
-            # para que la próxima invocación que case no vuelva a preguntar.
+            # allow_always: aplica las reglas sugeridas EN VIVO con destino
+            # "session" para que persistan el resto de la sesión del SDK y la
+            # próxima invocación que case no vuelva a preguntar.
             if answer == "allow_always" and suggestions:
-                kwargs["updated_permissions"] = suggestions
+                kwargs["updated_permissions"] = [
+                    replace(u, destination="session") for u in suggestions
+                ]
             return PermissionResultAllow(**kwargs)
         return PermissionResultDeny(message=DENY_MSG if answer == "deny" else TIMEOUT_MSG)
 
