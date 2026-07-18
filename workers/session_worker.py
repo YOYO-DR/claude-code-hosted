@@ -34,6 +34,19 @@ log = logging.getLogger("session_worker")
 HEARTBEAT_INTERVAL = 5  # segundos
 
 
+def redis_exceptions() -> tuple[type[BaseException], ...]:
+    """Tipos de error que redis-py puede lanzar cuando el bus está caído o
+    inestable. Import lazy para evitar cargar redis en frío."""
+    import redis.exceptions as r
+
+    return (
+        r.ConnectionError,
+        r.TimeoutError,
+        r.BusyLoadingError,
+        OSError,  # ConnectionResetError, BrokenPipeError, etc.
+    )
+
+
 class Worker:
     def __init__(self, sid: str) -> None:
         self.sid = sid
@@ -58,8 +71,17 @@ class Worker:
 
     async def _loop(self, session: Session, client: ClaudeSDKClient) -> None:
         while not self._stop.is_set():
-            popped = await self.redis.brpop([bus.key_in(self.sid)], timeout=5)
+            try:
+                popped = await self.redis.brpop([bus.key_in(self.sid)], timeout=5)
+            except redis_exceptions() as exc:
+                # Redis caído o inestable: log y reintentar. El loop NO muere;
+                # cuando vuelva el bus, se sigue leyendo la cola (PG ya tiene los
+                # eventos persistidos de cualquier turno en curso, §4.1).
+                log.warning("bus Redis no disponible (%s); reintentando", exc)
+                await asyncio.sleep(1.0)
+                continue
             if popped is None:
+                # brpop devolvio None solo si expiro el timeout, no por error.
                 continue
             _, raw = popped
             try:
