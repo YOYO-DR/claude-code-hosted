@@ -97,6 +97,43 @@ if [[ ! -f /etc/panel/ttyd.htpasswd ]]; then
   chmod 600 /etc/panel/ttyd.htpasswd
 fi
 
+echo "==> Dependencias Python del panel (uv sync en /opt/panel)"
+if [[ -f /opt/panel/pyproject.toml ]]; then
+  runuser -u panel -- env HOME=/home/panel uv sync --project /opt/panel --frozen 2>&1 | tail -3 || \
+    runuser -u panel -- env HOME=/home/panel uv sync --project /opt/panel 2>&1 | tail -3
+fi
+
+echo "==> panel.env (config del panel Django y de los workers)"
+# Secretos compartidos por panel.service y claude-session@.service. El token
+# del modelo NO va aquí (se descifra de la DB en memoria del worker, §4.3).
+if [[ ! -f /etc/panel/panel.env ]]; then
+  PG_PW="$(cat /etc/panel/postgres_password.txt)"
+  DJ_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')"
+  ENC_KEY="$(/opt/panel/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null \
+             || python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+  cat > /etc/panel/panel.env <<EOF
+DJANGO_SETTINGS_MODULE=panel.settings
+PANEL_DEBUG=0
+PANEL_SECRET_KEY=${DJ_KEY}
+PANEL_SECRET_ENC_KEYS=${ENC_KEY}
+PANEL_ALLOWED_HOSTS=claude-code-hosted.yoyodr.dev
+PANEL_CSRF_TRUSTED_ORIGINS=https://claude-code-hosted.yoyodr.dev
+PANEL_DB_NAME=panel
+PANEL_DB_USER=panel
+PANEL_DB_PASSWORD=${PG_PW}
+PANEL_DB_HOST=127.0.0.1
+PANEL_DB_PORT=5432
+PANEL_REDIS_URL=redis://127.0.0.1:6379/0
+PANEL_PROJECTS_ROOT=/srv/projects
+PANEL_AGENTS_HOME=/home/agents
+EOF
+  chmod 600 /etc/panel/panel.env
+fi
+
+echo "==> sudoers para el panel (solo systemctl de claude-session@*)"
+install -m 0440 -o root -g root /opt/panel/deploy/sudoers.d-panel /etc/sudoers.d/panel 2>/dev/null || true
+visudo -cf /etc/sudoers.d/panel >/dev/null
+
 echo "OK — instalacion completa."
 if [[ "${GENERATED_TTYD_PASSWORD:-0}" == "1" ]]; then
   echo "Credencial ttyd generada — guardala, no se vuelve a mostrar:"

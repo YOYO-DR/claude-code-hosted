@@ -1,0 +1,15 @@
+http:
+  routers:
+    panel:
+      rule: "Host(`claude-code-hosted.yoyodr.dev`)"
+      entryPoints: ["websecure"]
+      tls: {}
+      service: panel
+      # Prioridad baja: los routers de ttyd (PathPrefix, prioridad 100) ganan
+      # para /projects/<slug>/terminal; el resto cae al panel.
+      priority: 1
+  services:
+    panel:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"

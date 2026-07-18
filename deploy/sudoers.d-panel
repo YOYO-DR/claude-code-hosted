@@ -1,0 +1,3 @@
+# Instalado en /etc/sudoers.d/panel por link-units.sh. El usuario `panel` solo
+# puede arrancar/parar/consultar units de sesión — nada más con sudo.
+panel ALL=(root) NOPASSWD: /usr/bin/systemctl start claude-session@*, /usr/bin/systemctl stop claude-session@*, /usr/bin/systemctl status claude-session@*

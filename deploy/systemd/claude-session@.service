@@ -1,0 +1,23 @@
+[Unit]
+Description=Worker de sesión Claude Code %i
+After=network.target panel-infra.service
+Wants=panel-infra.service
+
+[Service]
+User=agents
+Group=agents
+WorkingDirectory=/opt/panel
+# El SESSION_ID viaja por el nombre de instancia (%i): sin archivo de env por
+# sesión. panel.env trae DB/Redis/SECRET_ENC_KEYS (600 root:root; systemd lo
+# lee como root antes de bajar a User=agents). El token del modelo NUNCA va
+# aquí: el worker lo descifra de la DB en memoria (§4.3).
+Environment=SESSION_ID=%i
+Environment=DJANGO_SETTINGS_MODULE=panel.settings
+EnvironmentFile=/etc/panel/panel.env
+ExecStart=/opt/panel/.venv/bin/python -m workers.session_worker
+Restart=on-failure
+RestartSec=3
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

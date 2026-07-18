@@ -23,7 +23,8 @@ else:
         lines.append(f'      rule: "PathPrefix(`/projects/{slug}/terminal`)"')
         lines.append('      entryPoints: ["websecure"]')
         lines.append("      tls: {}")
-        lines.append(f'      middlewares: ["ttyd-auth@file"]')
+        lines.append('      priority: 100')  # gana sobre el catch-all del panel
+        lines.append('      middlewares: ["ttyd-auth@file"]')
         lines.append(f"      service: proj-{slug}")
     lines.append("  services:")
     for slug, port in ports.items():
