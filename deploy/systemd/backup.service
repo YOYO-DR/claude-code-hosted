@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup cifrado del panel (pg_dump + configs .claude)
+After=panel-infra.service
+Wants=panel-infra.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/panel/deploy/backup.sh

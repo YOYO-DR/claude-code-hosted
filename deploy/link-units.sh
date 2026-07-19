@@ -8,12 +8,14 @@ SRC="/opt/panel/deploy/systemd"
 DST="/etc/systemd/system"
 VENV="/opt/panel/.venv/bin"
 
-for unit in panel-infra.service panel.service tg-bridge.service "tmux@.service" "ttyd@.service" "claude-session@.service"; do
+for unit in panel-infra.service panel.service tg-bridge.service backup.service backup.timer \
+            "tmux@.service" "ttyd@.service" "claude-session@.service"; do
   ln -sf "${SRC}/${unit}" "${DST}/${unit}"
 done
 
 # Helpers privilegiados de render/provisioning + sudoers para el panel.
 chmod 0755 /opt/panel/deploy/panel-render.sh /opt/panel/deploy/panel-provision.sh /opt/panel/deploy/panel-clone.sh
+chmod 0755 /opt/panel/deploy/backup.sh /opt/panel/deploy/restore.sh
 install -m 0440 -o root -g root /opt/panel/deploy/sudoers.d-panel /etc/sudoers.d/panel
 visudo -cf /etc/sudoers.d/panel >/dev/null
 
@@ -46,6 +48,9 @@ chown -R panel:panel /opt/panel/staticfiles
 echo "==> Levantando el panel"
 systemctl enable --now panel.service
 systemctl restart panel.service
+
+echo "==> Backup diario"
+systemctl enable --now backup.timer
 
 # tg-bridge: solo si hay token de Telegram configurado.
 if grep -q '^PANEL_TELEGRAM_BOT_TOKEN=.\+' /etc/panel/panel.env 2>/dev/null; then

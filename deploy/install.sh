@@ -134,6 +134,14 @@ PANEL_PUBLIC_BASE_URL=https://claude-code-hosted.yoyodr.dev
 # Telegram (Fase 4): rellenar y correr 'manage.py tg_setup'. Vacío = sin Telegram.
 PANEL_TELEGRAM_BOT_TOKEN=
 PANEL_TELEGRAM_USER_IDS=
+# Backup a S3/MinIO (Fase 6): vacío = solo backup local cifrado.
+PANEL_BACKUP_S3_ENDPOINT=
+PANEL_BACKUP_S3_BUCKET=
+PANEL_BACKUP_S3_ACCESS_KEY=
+PANEL_BACKUP_S3_SECRET_KEY=
+PANEL_BACKUP_S3_REGION=us-east-1
+PANEL_BACKUP_S3_PREFIX=panel/
+PANEL_BACKUP_S3_RETENTION=14
 EOF
   # root:panel 640: el usuario panel lo lee (migrate/collectstatic manual);
   # los servicios systemd lo leen como root antes de bajar de privilegios.

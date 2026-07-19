@@ -17,6 +17,7 @@ dependencies = [
     "whitenoise>=6.8",
     "mcp>=1.2",
     "httpx>=0.28",
+    "boto3>=1.35",
 ]
 
 [dependency-groups]
