@@ -1,6 +1,8 @@
+import json
+
 from django import forms
 
-from panel.core.models import Project
+from panel.core.models import McpServer, Project
 
 
 class LoginForm(forms.Form):
@@ -69,3 +71,91 @@ class ProjectForm(forms.ModelForm):
         if commit:
             project.save()
         return project
+
+
+class McpServerForm(forms.ModelForm):
+    """Crear/editar un MCP server. `config` se expone como textarea JSON para
+    no atar la UI a un schema concreto (stdio vs http difieren). Validamos
+    estructura mínima según `transport`."""
+
+    config_text = forms.CharField(
+        widget=forms.Textarea(attrs={"rows": 6, "cols": 60}),
+        required=False,
+        help_text=(
+            "JSON. stdio: {\"command\": \"...\", \"args\": [...], \"env\": {...}}. "
+            "http: {\"url\": \"http://127.0.0.1:PORT\"}."
+        ),
+        label="Config (JSON)",
+    )
+
+    class Meta:
+        model = McpServer
+        fields = ["name", "scope", "project", "transport", "enabled"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Si editamos, precargar config_text desde el JSONField.
+        if self.instance and self.instance.pk and self.instance.config:
+            self.fields["config_text"].initial = json.dumps(
+                self.instance.config, indent=2, ensure_ascii=False
+            )
+
+    def clean_name(self):
+        name = self.cleaned_data["name"].strip()
+        # El renderer usa `name` como clave en mcpServers{} — sin espacios raros.
+        if not name.replace("_", "").replace("-", "").isalnum():
+            raise forms.ValidationError(
+                "Usa solo letras, dígitos, '-' o '_'."
+            )
+        return name
+
+    def clean(self):
+        cleaned = super().clean() or {}
+        scope = cleaned.get("scope")
+        project = cleaned.get("project")
+        if scope == McpServer.Scope.PROJECT and not project:
+            raise forms.ValidationError(
+                "Si scope=project, debes elegir un proyecto."
+            )
+        if scope == McpServer.Scope.GLOBAL and project:
+            cleaned["project"] = None
+
+        # Parsear y validar config_text según transport.
+        raw = (cleaned.get("config_text") or "").strip()
+        if not raw:
+            raise forms.ValidationError(
+                "Config (JSON) es obligatorio."
+            )
+        try:
+            cfg = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise forms.ValidationError(f"JSON inválido: {exc}") from exc
+        if not isinstance(cfg, dict):
+            raise forms.ValidationError("Config debe ser un objeto JSON {}.")
+
+        transport = cleaned.get("transport")
+        if transport == McpServer.Transport.STDIO:
+            if "command" not in cfg or not isinstance(cfg["command"], str):
+                raise forms.ValidationError(
+                    "stdio requiere `command` (string)."
+                )
+            if "args" in cfg and not isinstance(cfg["args"], list):
+                raise forms.ValidationError("`args` debe ser una lista.")
+            if "env" in cfg and not isinstance(cfg["env"], dict):
+                raise forms.ValidationError("`env` debe ser un objeto {}.")
+        elif transport == McpServer.Transport.HTTP:
+            url = cfg.get("url")
+            if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise forms.ValidationError(
+                    "http requiere `url` (http:// o https://)."
+                )
+
+        cleaned["config"] = cfg
+        return cleaned
+
+    def save(self, commit: bool = True):
+        mcp = super().save(commit=False)
+        mcp.config = self.cleaned_data["config"]
+        if commit:
+            mcp.save()
+        return mcp

@@ -13,13 +13,14 @@ from django.views.decorators.http import require_POST
 from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from panel.core.models import Config, PermissionRequest, Project, Session
+from panel.core.models import Config, McpServer, PermissionRequest, Project, Session
 from panel.core.services import github as gh
 from panel.core.services import permissions as perm_svc
+from panel.core.services import privileged
 from panel.core.services import provisioning as prov_svc
 from panel.core.services import sessions as session_svc
 from panel.core.services import telegram as tg
-from panel.ui.forms import LoginForm, ProjectForm
+from panel.ui.forms import LoginForm, McpServerForm, ProjectForm
 
 
 def login_view(request):
@@ -143,6 +144,76 @@ def project_archive(request, slug):
     project = get_object_or_404(Project, slug=slug)
     prov_svc.archive_project(project)
     return redirect("session_list")
+
+
+@login_required
+def mcp_list(request):
+    """Listado de MCPs (global + project) para gestionar y crear nuevos."""
+    if not request.user.is_verified():
+        return redirect("login")
+    mcps = McpServer.objects.select_related("project").order_by("scope", "name")
+    return render(request, "ui/mcp_list.html", {"mcps": mcps})
+
+
+@login_required
+def mcp_create(request):
+    """Form de creación. Al guardar, dispara render (re-genera .mcp.json)."""
+    if not request.user.is_verified():
+        return redirect("login")
+    if request.method == "POST":
+        form = McpServerForm(request.POST)
+        if form.is_valid():
+            form.save()
+            try:
+                privileged.run_render()
+            except Exception as exc:
+                return render(
+                    request,
+                    "ui/mcp_form.html",
+                    {"form": form, "error": f"guardado OK pero render falló: {exc}"},
+                    status=502,
+                )
+            return redirect("mcp_list")
+    else:
+        form = McpServerForm()
+    return render(request, "ui/mcp_form.html", {"form": form})
+
+
+@login_required
+def mcp_edit(request, mcp_id):
+    if not request.user.is_verified():
+        return HttpResponse(status=403)
+    mcp = get_object_or_404(McpServer, id=mcp_id)
+    if request.method == "POST":
+        form = McpServerForm(request.POST, instance=mcp)
+        if form.is_valid():
+            form.save()
+            try:
+                privileged.run_render()
+            except Exception as exc:
+                return render(
+                    request,
+                    "ui/mcp_form.html",
+                    {"form": form, "mcp": mcp, "error": f"guardado OK pero render falló: {exc}"},
+                    status=502,
+                )
+            return redirect("mcp_list")
+    else:
+        form = McpServerForm(instance=mcp)
+    return render(request, "ui/mcp_form.html", {"form": form, "mcp": mcp})
+
+
+@login_required
+@require_POST
+def mcp_toggle(request, mcp_id):
+    """Enable/disable rápido. POST. Regenera render."""
+    if not request.user.is_verified():
+        return HttpResponse(status=403)
+    mcp = get_object_or_404(McpServer, id=mcp_id)
+    mcp.enabled = not mcp.enabled
+    mcp.save(update_fields=["enabled", "updated_at"])
+    privileged.run_render()
+    return redirect("mcp_list")
 
 
 @login_required

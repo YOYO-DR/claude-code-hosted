@@ -13,6 +13,10 @@ urlpatterns = [
     path("projects/<slug:slug>/start/", views.session_start, name="session_start"),
     path("projects/new/", views.project_create, name="project_create"),
     path("projects/<slug:slug>/archive/", views.project_archive, name="project_archive"),
+    path("mcps/", views.mcp_list, name="mcp_list"),
+    path("mcps/new/", views.mcp_create, name="mcp_create"),
+    path("mcps/<int:mcp_id>/edit/", views.mcp_edit, name="mcp_edit"),
+    path("mcps/<int:mcp_id>/toggle/", views.mcp_toggle, name="mcp_toggle"),
     path("permissions/", views.permission_queue, name="permission_queue"),
     path(
         "permissions/<uuid:request_id>/resolve/",

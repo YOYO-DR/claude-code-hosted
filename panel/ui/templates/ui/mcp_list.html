@@ -1,0 +1,39 @@
+{% extends "ui/base.html" %}
+{% block title %}MCPs · Panel{% endblock %}
+{% block content %}
+  <h1>MCPs</h1>
+  <p><a href="{% url 'mcp_create' %}">+ Nuevo MCP</a></p>
+
+  <table>
+    <thead><tr>
+      <th>Nombre</th><th>Scope</th><th>Proyecto</th><th>Transport</th><th>Habilitado</th><th>Acciones</th>
+    </tr></thead>
+    <tbody>
+      {% for m in mcps %}
+        <tr>
+          <td><code>{{ m.name }}</code></td>
+          <td>{{ m.get_scope_display }}</td>
+          <td>{{ m.project.slug|default:"—" }}</td>
+          <td>{{ m.get_transport_display }}</td>
+          <td>{% if m.enabled %}✅{% else %}❌{% endif %}</td>
+          <td>
+            <a href="{% url 'mcp_edit' m.id %}">editar</a>
+            <form class="inline" method="post" action="{% url 'mcp_toggle' m.id %}">
+              {% csrf_token %}
+              <button class="muted">{% if m.enabled %}deshabilitar{% else %}habilitar{% endif %}</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="muted">Sin MCPs. Crea uno para empezar.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="muted">
+    Para que un MCP stdio funcione, su <code>command</code> debe estar en el PATH
+    del usuario <code>agents</code> del VPS (donde corre el worker). Para MCPs
+    HTTP, el <code>url</code> debe apuntar a un servicio local (127.0.0.1) o
+    accesible desde el VPS.
+  </p>
+{% endblock %}
