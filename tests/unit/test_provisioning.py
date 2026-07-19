@@ -50,6 +50,67 @@ def test_provision_idempotent(tmp_path):
     assert (Path(project.path) / ".git").is_dir()
 
 
+def test_provision_writes_agents_md(tmp_path):
+    project = _project("alpha", tmp_path)
+    project.github_repo = "owner/alpha-repo"
+    project.github_enabled = False  # sin token: cae al path dir vacío
+    project.save()
+    provisioning.provision_project(project)
+    agents_md = Path(project.path) / "AGENTS.md"
+    assert agents_md.is_file()
+    body = agents_md.read_text(encoding="utf-8")
+    assert "NO EDITAR" in body
+    assert "alpha" in body
+    assert project.path in body  # el path real del fixture, no el default
+    assert "owner/alpha-repo" in body
+    assert "agent/alpha" in body  # nombre de la rama
+
+
+def test_agents_md_idempotent_overwrites(tmp_path):
+    project = _project("beta", tmp_path)
+    provisioning.provision_project(project)
+    Path(project.path, "AGENTS.md").write_text("CONTENIDO ROTO", encoding="utf-8")
+    provisioning.provision_project(project)
+    body = Path(project.path, "AGENTS.md").read_text(encoding="utf-8")
+    assert "CONTENIDO ROTO" not in body
+    assert "NO EDITAR" in body
+
+
+def test_archive_removes_agents_md(tmp_path):
+    project = _project("gamma", tmp_path)
+    provisioning.provision_project(project)
+    assert (Path(project.path) / "AGENTS.md").is_file()
+    provisioning.archive_project(project)
+    assert not (Path(project.path) / "AGENTS.md").exists()
+    project.refresh_from_db()
+    assert project.status == Project.Status.ARCHIVED
+
+
+def test_privileged_calls_write_agents_helper(monkeypatch):
+    """write_agents_md debe mandar el contenido por stdin al helper sudo."""
+    from panel.core.services import privileged
+
+    calls = []
+    monkeypatch.setattr(privileged.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(privileged.shutil, "which", lambda _: "/usr/bin/sudo")
+    monkeypatch.setattr(privileged.os.path, "exists", lambda _: True)
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw.get("input")))
+        return None
+
+    monkeypatch.setattr(privileged.subprocess, "run", fake_run)
+    privileged.write_agents_md("/srv/projects/x", "# AGENTS\n")
+    privileged.remove_agents_md("/srv/projects/x")
+    assert calls[0] == (
+        ["sudo", "-n", privileged.PROVISION_HELPER, "write-agents", "/srv/projects/x"],
+        "# AGENTS\n",
+    )
+    assert calls[1][0] == [
+        "sudo", "-n", privileged.PROVISION_HELPER, "remove-agents", "/srv/projects/x",
+    ]
+
+
 def test_needs_restart_on_mcp_change(tmp_path):
     project = _project("alpha", tmp_path)
     # La sesión arranca DESPUÉS de que la config del proyecto ya existe.
@@ -78,7 +139,7 @@ def test_privileged_uses_sudo_helper_when_not_root(monkeypatch):
     privileged.run_provision("alpha", "/srv/projects/alpha")
     privileged.run_render()
     assert calls == [
-        ["sudo", "-n", privileged.PROVISION_HELPER, "alpha", "/srv/projects/alpha"],
+        ["sudo", "-n", privileged.PROVISION_HELPER, "provision", "alpha", "/srv/projects/alpha"],
         ["sudo", "-n", privileged.RENDER_HELPER],
     ]
 

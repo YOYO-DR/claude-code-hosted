@@ -1,24 +1,29 @@
 # CHECKLIST-fase0.md — confirmación manual de Yoiner
 
-Lo automatizable ya está verde (ver `PROGRESS.md`). Falta tu verificación
-manual de la parte de UX en navegador antes de dar el Gate 0 por cerrado:
+**Gate 0 cerrado 2026-07-19** (validado por Yoiner en navegador).
 
-- [ ] Abrir en el navegador
+Lo automatizable ya está verde (ver `PROGRESS.md`).
+
+## Validación manual realizada
+
+- [x] Abrir en el navegador
       `https://claude-code-hosted.yoyodr.dev/projects/demo/terminal`
       → pide usuario/contraseña (basicAuth). Candado de TLS válido.
-      Credenciales: usuario `yoiner`, password que `install.sh` mostró una
-      sola vez al generarla. Si la perdiste, se regenera borrando
-      `/etc/panel/ttyd.htpasswd` y re-corriendo `install.sh`.
-- [ ] Dentro del terminal: se ve un tmux con shell del usuario `agents` en
-      `/srv/projects/demo`. Escribe algo, cierra la pestaña, vuelve a abrir la
-      URL → la sesión sigue igual (mismo scrollback).
-- [ ] (Opcional) Lanza `claude` dentro del terminal y confirma que la CLI
-      arranca.
+- [x] Dentro del terminal: tmux con shell del usuario `agents` en
+      `/srv/projects/demo`. Cierre de pestaña + reapertura → scrollback
+      intacto.
+- [x] `claude` CLI arranca dentro del terminal.
 
-Cuando lo confirmes, marco el Gate 0 como cerrado y arranco la Fase 1
-(panel Django + worker de sesión). Antes de Fase 1 haré la **DETENCIÓN**
-correspondiente si aplica, aunque el remote de repo y el dominio ya están
-resueltos.
+## Nota sobre las credenciales (descubierto al rotar)
+
+El basicAuth que ve el navegador **lo sirve Traefik**, no ttyd. El archivo
+real es `/etc/traefik/secrets/ttyd.htpasswd` (middleware `ttyd-auth` en
+`deploy/traefik/dynamic/middlewares.yml`). `/etc/panel/ttyd.htpasswd` existe
+pero hoy nadie lo lee.
+
+Para rotar la contraseña hay que regenerar el de Traefik y reiniciar el
+contenedor Traefik. Credenciales actuales en `vps.env` como
+`TRAEFIK_USER` / `TRAEFIK_PASS` (las `TERMINAL_DEMO_*` son legado).
 
 ## Limpieza del proyecto `demo`
 

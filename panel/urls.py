@@ -11,6 +11,8 @@ urlpatterns = [
     path("sessions/<uuid:sid>/", views.session_detail, name="session_detail"),
     path("sessions/<uuid:sid>/stop/", views.session_stop, name="session_stop"),
     path("projects/<slug:slug>/start/", views.session_start, name="session_start"),
+    path("projects/new/", views.project_create, name="project_create"),
+    path("projects/<slug:slug>/archive/", views.project_archive, name="project_archive"),
     path("permissions/", views.permission_queue, name="permission_queue"),
     path(
         "permissions/<uuid:request_id>/resolve/",

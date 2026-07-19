@@ -39,9 +39,32 @@ def run_render() -> None:
 
 def run_provision(slug: str, path: str) -> None:
     if not _is_root() and _can_sudo(PROVISION_HELPER):
-        subprocess.run(["sudo", "-n", PROVISION_HELPER, slug, path], check=True)
+        subprocess.run(["sudo", "-n", PROVISION_HELPER, "provision", slug, path], check=True)
         return
     _provision_inprocess(path)
+
+
+def write_agents_md(path: str, content: str) -> None:
+    """Escribe AGENTS.md en `path` (bajo /srv/projects/) como root. El panel lo
+    genera en Python y lo manda por stdin al helper sudo. Idempotente."""
+    if not _is_root() and _can_sudo(PROVISION_HELPER):
+        subprocess.run(
+            ["sudo", "-n", PROVISION_HELPER, "write-agents", path],
+            input=content, text=True, check=True,
+        )
+        return
+    _write_agents_md_inprocess(path, content)
+
+
+def remove_agents_md(path: str) -> None:
+    """Borra AGENTS.md de `path` si existe. Idempotente (no falla si no está)."""
+    if not _is_root() and _can_sudo(PROVISION_HELPER):
+        subprocess.run(
+            ["sudo", "-n", PROVISION_HELPER, "remove-agents", path], check=True,
+        )
+        return
+    from pathlib import Path
+    Path(path, "AGENTS.md").unlink(missing_ok=True)
 
 
 def run_clone(path: str, repo: str, branch: str, token: str) -> None:
@@ -82,3 +105,11 @@ def _provision_inprocess(path: str) -> None:
     if not (p / ".git").exists():
         sp.run(["git", "init", "-q", str(p)], check=True)
     renderer.render_all()
+
+
+def _write_agents_md_inprocess(path: str, content: str) -> None:
+    """Escribe AGENTS.md en proceso (root/tests), sin chown."""
+    from pathlib import Path
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "AGENTS.md").write_text(content, encoding="utf-8")

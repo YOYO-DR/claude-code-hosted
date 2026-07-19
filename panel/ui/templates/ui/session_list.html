@@ -10,10 +10,17 @@
         {% csrf_token %}
         <button>▶ {{ p.name }} <span class="muted">({{ p.slug }})</span></button>
       </form>
+      <form class="inline" method="post" action="{% url 'project_archive' p.slug %}"
+            onsubmit="return confirm('¿Archivar {{ p.slug }}? Sus sesiones se detendrán.')">
+        {% csrf_token %}
+        <button class="muted" title="Archivar">✕</button>
+      </form>
     {% endfor %}
-  {% else %}
-    <p class="muted">No hay proyectos activos. Crea uno en el <a href="/admin/">admin</a>.</p>
   {% endif %}
+  <p>
+    <a href="{% url 'project_create' %}">+ Nuevo proyecto</a>
+    {% if not projects %} <span class="muted">(todavía no hay proyectos)</span>{% endif %}
+  </p>
 
   <h2>Historial</h2>
   <table>

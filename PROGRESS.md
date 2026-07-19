@@ -5,8 +5,8 @@ para el detalle de cada gate.
 
 ## Fase 0 — Infra base + escotilla ttyd
 
-Estado: **gate automatizado verde**; pendiente confirmación manual de Yoiner
-(ver `CHECKLIST-fase0.md`).
+Estado: **Gate 0 cerrado 2026-07-19** (validación manual de Yoiner en
+navegador: basicAuth OK, tmux persistente, `claude` CLI arranca).
 
 VPS: Ubuntu 24.04.4, 4 vCPU / 7.94 GB / 96 GB. `169.58.33.122`. Dominio
 `claude-code-hosted.yoyodr.dev` (Cloudflare proxied, Full strict).

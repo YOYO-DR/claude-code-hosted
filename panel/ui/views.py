@@ -16,9 +16,10 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from panel.core.models import Config, PermissionRequest, Project, Session
 from panel.core.services import github as gh
 from panel.core.services import permissions as perm_svc
+from panel.core.services import provisioning as prov_svc
 from panel.core.services import sessions as session_svc
 from panel.core.services import telegram as tg
-from panel.ui.forms import LoginForm
+from panel.ui.forms import LoginForm, ProjectForm
 
 
 def login_view(request):
@@ -103,6 +104,45 @@ def session_stop(request, sid):
     session = get_object_or_404(Session, id=sid)
     session_svc.stop_session(session)
     return redirect("session_detail", sid=session.id)
+
+
+@login_required
+def project_create(request):
+    """Form de creación. Al guardar exitosamente, provisiona (clone/init +
+    AGENTS.md) y redirige a la lista de sesiones."""
+    if not request.user.is_verified():
+        return redirect("login")
+    if request.method == "POST":
+        form = ProjectForm(request.POST)
+        if form.is_valid():
+            project = form.save()
+            try:
+                prov_svc.provision_project(project)
+            except Exception as exc:
+                # Si el provisioning falla (clone sin red, etc.) el Project ya
+                # está creado; dejamos que el operador reintente desde admin.
+                return render(
+                    request,
+                    "ui/project_form.html",
+                    {"form": form, "error": f"guardado OK pero provisioning falló: {exc}"},
+                    status=502,
+                )
+            return redirect("session_list")
+    else:
+        form = ProjectForm()
+    return render(request, "ui/project_form.html", {"form": form})
+
+
+@login_required
+def project_archive(request, slug):
+    """Archivar un proyecto (POST). Mantiene datos y archivos; detiene sesiones."""
+    if not request.user.is_verified():
+        return HttpResponse(status=403)
+    if request.method != "POST":
+        return redirect("session_list")
+    project = get_object_or_404(Project, slug=slug)
+    prov_svc.archive_project(project)
+    return redirect("session_list")
 
 
 @login_required
