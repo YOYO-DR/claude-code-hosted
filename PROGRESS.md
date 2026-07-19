@@ -381,3 +381,30 @@ Commit `55e6dbb`.
   `.claude/`+`.mcp.json` van a `.git/info/exclude` (no ensucian PRs).
 - Sin `git worktree` por ahora (el worker es cola serial; una clonación por
   proyecto basta). Se adoptará si hay sesiones concurrentes sobre el mismo repo.
+
+---
+
+## Fase 6 — Endurecimiento y validación final — GATE CERRADO (2026-07-19)
+
+Backup+restore, alertas, regresión y caos. Commits `1973d97`..`6eb41b4`.
+
+### Gate 6 — resultados
+
+| Ítem | Resultado |
+|------|-----------|
+| Backup diario cifrado (pg_dump + .claude) | ✅ `backup.timer` 03:30; tar AES-256; retención local 7 |
+| **Restore real en dir/DB limpia + arrancar panel** | ✅ restauró en `panel_restore_test`, `migrate --check` OK, datos intactos (6 proy, 25 ses, tokens cifrados) |
+| Backup a S3/MinIO | ⏳ cableado + retención remota; **pendiente credenciales** para probar upload (local ya funciona) |
+| Alertas a topic sistema (disco/crash-loop/heartbeat) | ✅ alerta de disco 95% enviada en vivo; heartbeat marca `crashed` (unit + reboot); crash-loop por NRestarts |
+| Suite de regresión (fases 1-5) desde cero | ✅ 95 tests verdes en corrida limpia; ruff+mypy |
+| **Caos: Redis caído bajo carga** | ✅ 20s → 0 eventos perdidos, worker recupera |
+| **Caos: PG caído** | ✅ 15s → recupera coherente, panel vivo |
+| **Caos: disco al 95%** | ✅ `fallocate` → monitor alerta → liberado |
+| **Caos: reboot frío con 3 sesiones vivas** | ✅ al volver: infra+panel+bridge+monitor auto-arriba; 3 sesiones → `crashed` (0 fantasmas) |
+| Caos: desfase de reloj ±5 min | ✅ los timeouts usan `time.monotonic` (unit `test_wait_answer_monotonic_ignores_wall_clock`); no se toca el reloj del VPS (rompería TLS) |
+| REPORT.md (arquitectura, cobertura, métricas, deudas, runbook) | ✅ |
+
+### Métricas (8 sesiones activas)
+
+~2.36 GB usados / ~5.5 GB disponibles (VPS 8GB); ~175 MB marginales por sesión;
+`MemoryMax=1G`/worker nunca alcanzado. Sin swap.
