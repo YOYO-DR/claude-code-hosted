@@ -78,6 +78,19 @@ async def test_wait_answer_timeout_returns_none():
     assert got is None
 
 
+async def test_wait_answer_monotonic_ignores_wall_clock(monkeypatch):
+    """Desfase de reloj (§6.4): el deadline usa time.monotonic, así que un salto
+    del reloj de pared NO expira el permiso antes de tiempo."""
+    import time
+
+    ar = _aredis()
+    await ar.set(bus.key_answer("req-1"), "allow|web")
+    # simular reloj de pared saltado +1 año; monotonic sigue normal
+    monkeypatch.setattr(time, "time", lambda: time.monotonic() + 31_536_000)
+    got = await perm_svc._wait_answer(ar, "req-1", timeout_s=5, poll_interval=0.02)
+    assert got == "allow|web"  # devuelve la respuesta, no timeout
+
+
 async def test_request_and_wait_timeout_expires(monkeypatch):
     from asgiref.sync import sync_to_async
 
