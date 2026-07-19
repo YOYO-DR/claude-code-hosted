@@ -54,6 +54,10 @@ echo "==> Usuarios de sistema"
 id -u agents >/dev/null 2>&1 || useradd --create-home --shell /bin/bash agents
 id -u panel  >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin panel
 usermod -aG docker agents
+# Identidad git de los agentes (para commits en repos de GitHub, Fase 5).
+runuser -u agents -- git config --global user.email "agente@claude-code-hosted.local" || true
+runuser -u agents -- git config --global user.name "Agente Claude Code" || true
+runuser -u agents -- git config --global --add safe.directory '*' || true
 
 echo "==> Directorios"
 install -d -o panel  -g panel  -m 0755 "$REPO_DIR"

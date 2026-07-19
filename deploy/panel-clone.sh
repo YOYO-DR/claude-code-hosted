@@ -26,6 +26,9 @@ git -c http.extraHeader="AUTHORIZATION: basic ${b64}" clone --quiet "https://git
 git -C "$path" checkout -q -B "$branch"
 # Higiene: asegurar que el remoto NO lleva credenciales.
 git -C "$path" remote set-url origin "https://github.com/${repo}.git"
+# Los artefactos de plataforma (los materializa el renderer) no deben aparecer en
+# git status / PRs del repo del usuario.
+printf '.claude/\n.mcp.json\n' >> "$path/.git/info/exclude"
 chown -R agents:agents "$path"
 
 exec /opt/panel/deploy/panel-render.sh

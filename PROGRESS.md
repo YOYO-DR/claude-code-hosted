@@ -348,3 +348,36 @@ MCP de puertos in-process (§4.5) + hook de coordinación, y Telegram completo
   la respuesta de Redis.
 - Telegram: chat_id `-1004460248369`, topic sistema, webhook con secret; token y
   allowlist en panel.env; `manage.py tg_setup` hace el setup una vez.
+
+---
+
+## Fase 5 — GitHub — GATE CERRADO (2026-07-18)
+
+API para la plataforma + MCP de agentes (sin merge) + token por frontend.
+Commit `55e6dbb`.
+
+### Gate 5 — resultados (e2e real contra `YOYO-DR/plantilla-django-react`)
+
+| Check | Resultado |
+|-------|-----------|
+| **E2E: el agente hace un cambio y abre PR vía MCP** | ✅ el agente editó README, commiteó y llamó `mcp__github__open_pull_request` → **PR #1 real** (`agent/webtpl`→`main`, 1 commit, 1 archivo), verificado por API |
+| El token del agente NO puede mergear | ✅ el MCP NO expone ninguna tool de merge (unit); el agente no tiene camino a merge. Nota: el token (elección del usuario: mismo PAT) SÍ puede mergear por API → el candado duro es **branch protection** en el repo |
+| NO ver/operar repos fuera de la lista | ✅ el MCP está ligado al `github_repo` del proyecto; ninguna tool acepta repo arbitrario |
+| Token revocado → error legible, sin crash. 401/403/429 → superficie clara | ✅ unit (401="revocado", 403 rate-limit, 429 backoff); `validate()` devuelve `{ok, error}` para la UI |
+| **Grep: el PAT no aparece en logs, eventos PG, TG, ni en el repo** | ✅ journald=0, `git log -p --all`=0, `.git/`=0, eventos PG=0; en Config está **cifrado** (no en claro). `.git/config` sin token (extraHeader) |
+| Token por frontend + validación + lista de repos | ✅ `/github/`: pega token → autentica (YOYO-DR) + lista 53 repos → guarda cifrado; no se re-muestra |
+| 88 unit tests, ruff + mypy limpios | ✅ |
+
+### Notas de diseño (D10)
+
+- **MCP de GitHub in-process** (como el de puertos, D9): token en memoria del
+  worker desde Config (BD, cifrado); nunca a `.mcp.json`/disco. Ligado al repo
+  del proyecto.
+- **"Sin merge" por omisión de tool** (no hay tool de merge), no por scope del
+  token (el usuario eligió el mismo PAT). Para un candado duro: branch protection.
+- **git con `http.extraHeader`**: el token nunca toca `.git/config` ni la URL del
+  remoto. El clone lo hace `panel-clone.sh` (root) con el token por **STDIN**.
+- Crear proyecto con `github_repo`+`github_enabled` → clona en `agent/<slug>`.
+  `.claude/`+`.mcp.json` van a `.git/info/exclude` (no ensucian PRs).
+- Sin `git worktree` por ahora (el worker es cola serial; una clonación por
+  proyecto basta). Se adoptará si hay sesiones concurrentes sobre el mismo repo.

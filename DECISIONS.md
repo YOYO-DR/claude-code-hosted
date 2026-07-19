@@ -213,3 +213,30 @@ El **hook de coordinación de puertos** vive en `can_use_tool` (§4.2 task 4) �
 solo se consulta en modo `approve`. En `auto` (bypassPermissions) el SDK no llama
 al callback, así que la coordinación depende de `allocate_port` + el prompt
 global. Es coherente con "auto = confío en este proyecto".
+
+---
+
+## D10 — GitHub: MCP in-process sin merge + token efímero (Fase 5)
+
+Decisiones de Yoiner: (a) sin `administration:rw` (él crea los repos y da acceso
+al token); (b) **mismo PAT** para plataforma y agentes, guardado **cifrado en la
+BD** (Config), no `gh login` en el VPS; (c) el token se pide **por frontend** y
+el panel lo valida (autentica + lista repos).
+
+Implementación:
+- **MCP de GitHub in-process** (coherente con D9): `create_sdk_mcp_server` montado
+  por el worker con el token en memoria (desde Config, descifrado). Ligado al
+  `github_repo` del proyecto — el agente no puede apuntar a otro repo. Expone
+  `open_pull_request` / `push_branch` / `list_pull_requests` / `comment_pull_request`.
+- **"Sin merge" = no exponer tool de merge.** Como el token es el mismo (puede
+  mergear por API), el enforcement fuerte es **branch protection** del repo; a
+  nivel de agente, simplemente no hay camino a merge.
+- **Token nunca a disco:** API vía httpx (logs silenciados); git vía
+  `-c http.extraHeader="AUTHORIZATION: basic <b64(x-access-token:token)>"` (NO se
+  persiste en `.git/config`, NO va en la URL del remoto). El clone privilegiado
+  (`panel-clone.sh`, root) recibe el token por **STDIN**, no por argv.
+- Verificado con grep exhaustivo: el PAT no aparece en journald, `git log -p`,
+  `.git/`, ni en eventos de Postgres; en Config queda cifrado.
+- **Sin `git worktree`** por ahora (§5.2): el worker es cola serial y hay una
+  clonación por proyecto. Se reevaluará si aparecen sesiones concurrentes sobre
+  el mismo repo.
