@@ -17,6 +17,7 @@ import subprocess
 
 RENDER_HELPER = "/opt/panel/deploy/panel-render.sh"
 PROVISION_HELPER = "/opt/panel/deploy/panel-provision.sh"
+CLONE_HELPER = "/opt/panel/deploy/panel-clone.sh"
 
 
 def _is_root() -> bool:
@@ -41,6 +42,31 @@ def run_provision(slug: str, path: str) -> None:
         subprocess.run(["sudo", "-n", PROVISION_HELPER, slug, path], check=True)
         return
     _provision_inprocess(path)
+
+
+def run_clone(path: str, repo: str, branch: str, token: str) -> None:
+    """Clona `repo` en `path`, crea `branch`, chownea a agents y renderiza. El
+    token va por STDIN (nunca argv/disco)."""
+    if not _is_root() and _can_sudo(CLONE_HELPER):
+        subprocess.run(
+            ["sudo", "-n", CLONE_HELPER, path, repo, branch],
+            input=token + "\n", text=True, check=True,
+        )
+        return
+    _clone_inprocess(path, repo, branch, token)
+
+
+def _clone_inprocess(path: str, repo: str, branch: str, token: str) -> None:
+    """Clone + rama + render en proceso (root/tests), sin chown."""
+    import shutil
+
+    from panel.core import renderer
+    from panel.core.services import github
+
+    shutil.rmtree(path, ignore_errors=True)
+    github.clone(token, repo, path)
+    github.create_branch(path, branch)
+    renderer.render_all()
 
 
 def _provision_inprocess(path: str) -> None:

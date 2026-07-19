@@ -14,6 +14,7 @@ from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from panel.core.models import Config, PermissionRequest, Project, Session
+from panel.core.services import github as gh
 from panel.core.services import permissions as perm_svc
 from panel.core.services import sessions as session_svc
 from panel.core.services import telegram as tg
@@ -134,6 +135,37 @@ def permission_resolve(request, request_id):
     finally:
         client.close()
     return JsonResponse({"ok": claimed, "conflict": not claimed})
+
+
+@login_required
+def github_settings(request):
+    """Ajustes de GitHub: pegar el token (por frontend), validarlo (autentica +
+    lista repos) y guardarlo cifrado en BD. El token nunca se re-muestra."""
+    if not request.user.is_verified():
+        return redirect("login")
+    result = None
+    if request.method == "POST":
+        token = (request.POST.get("token") or "").strip()
+        if token:
+            result = gh.validate(token)
+            if result["ok"]:
+                gh.store_token(token)
+        else:
+            # revalidar el token ya guardado
+            stored = gh.get_token()
+            result = (
+                gh.validate(stored)
+                if stored
+                else {"ok": False, "error": "no hay token guardado", "repos": []}
+            )
+    elif gh.has_token():
+        stored = gh.get_token()
+        result = gh.validate(stored) if stored else None
+    return render(
+        request,
+        "ui/github.html",
+        {"has_token": gh.has_token(), "result": result},
+    )
 
 
 @csrf_exempt

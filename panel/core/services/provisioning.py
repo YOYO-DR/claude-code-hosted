@@ -13,16 +13,26 @@ import logging
 from django.conf import settings
 
 from panel.core.models import Config, Project, Session
-from panel.core.services import privileged
+from panel.core.services import github, privileged
 from panel.core.services import sessions as session_svc
 from panel.core.services import telegram as tg
 
 log = logging.getLogger("provisioning")
 
+AGENT_BRANCH = "agent/{slug}"
+
 
 def provision_project(project: Project) -> None:
-    """Directorio + git init + chown agents + render de todos. Idempotente.
-    Además crea el topic de Telegram del proyecto (§4.6), best-effort."""
+    """Provisiona el proyecto: clona desde GitHub (rama agent/<slug>) si tiene
+    repo activo y hay token; si no, dir vacío con git init. Crea el topic de
+    Telegram (best-effort). Idempotente."""
+    if project.github_repo and project.github_enabled and github.has_token():
+        token = github.get_token()
+        if token:
+            branch = AGENT_BRANCH.format(slug=project.slug)
+            privileged.run_clone(project.path, project.github_repo, branch, token)
+            ensure_topic(project)
+            return
     privileged.run_provision(project.slug, project.path)
     ensure_topic(project)
 

@@ -31,10 +31,12 @@ from claude_agent_sdk import (  # noqa: E402
 from django.conf import settings  # noqa: E402
 from django.utils import timezone  # noqa: E402
 
+from mcp_github import server as github_mcp  # noqa: E402
 from mcp_ports import server as ports_mcp  # noqa: E402
 from panel.core import bus  # noqa: E402
-from panel.core.models import Event, Session  # noqa: E402
+from panel.core.models import Event, Project, Session  # noqa: E402
 from panel.core.services import events as event_svc  # noqa: E402
+from panel.core.services import github as gh_svc  # noqa: E402
 from panel.core.services import permissions as perm_svc  # noqa: E402
 from panel.core.services import ports as ports_svc  # noqa: E402
 from panel.core.services import serialize  # noqa: E402
@@ -229,11 +231,19 @@ class Worker:
         # se auto-permiten (son la vía sancionada para obtener puertos).
         ports_server = ports_mcp.build_server(project.slug, self.sid)
         allowed = list(policy.allowed_tools or []) + ports_mcp.TOOL_NAMES
+        mcp_servers: dict = {"ports": ports_server}
+        # MCP de GitHub in-process (§5.3): solo si el proyecto lo tiene activo y
+        # hay token. El token vive en memoria; el agente no puede mergear.
+        gh_cfg = await sync_to_async(self._github_config)(project)
+        if gh_cfg is not None:
+            repo, token = gh_cfg
+            mcp_servers["github"] = github_mcp.build_server(repo, project.path, token)
+            allowed += github_mcp.TOOL_NAMES
         return ClaudeAgentOptions(
             cwd=project.path,
             permission_mode=mode,
             allowed_tools=allowed,
-            mcp_servers={"ports": ports_server},
+            mcp_servers=mcp_servers,
             # El callback solo se consulta en zona indecisa (ni allow ni deny
             # obligatoria). En modo auto (bypass) el SDK ni lo llama.
             can_use_tool=self._can_use_tool if approve else None,
@@ -281,6 +291,15 @@ class Worker:
                 ]
             return PermissionResultAllow(**kwargs)
         return PermissionResultDeny(message=DENY_MSG if answer == "deny" else TIMEOUT_MSG)
+
+    def _github_config(self, project: Project) -> tuple[str, str] | None:
+        """(repo, token) si el proyecto tiene GitHub activo y hay token; si no None."""
+        if not (project.github_enabled and project.github_repo):
+            return None
+        token = gh_svc.get_token()
+        if not token:
+            return None
+        return project.github_repo, token
 
     @sync_to_async
     def _load_session(self) -> Session:

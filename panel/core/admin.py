@@ -54,7 +54,8 @@ class PermissionPolicyAdmin(admin.ModelAdmin):
 
 @admin.register(models.Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ("slug", "name", "status", "model_profile", "permission_policy")
+    list_display = ("slug", "name", "status", "model_profile", "permission_policy",
+                    "github_repo", "github_enabled")
     prepopulated_fields = {"slug": ("name",)}
     actions = ["archivar"]
 

@@ -36,6 +36,7 @@
           Aprobaciones
           {% if pending_count %}<span class="pill" style="background:#c33;color:#fff">{{ pending_count }}</span>{% endif %}
         </a>
+        <a href="{% url 'github_settings' %}" style="text-decoration:none; margin-right:.8rem">GitHub</a>
         <span class="muted">{{ user.username }}</span>
         <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}
           <button>Salir</button>

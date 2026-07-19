@@ -5,3 +5,4 @@
 panel ALL=(root) NOPASSWD: /usr/bin/systemctl start claude-session@*, /usr/bin/systemctl stop claude-session@*, /usr/bin/systemctl status claude-session@*
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-render.sh
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-provision.sh [a-z0-9-]* /srv/projects/*
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-clone.sh /srv/projects/*

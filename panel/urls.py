@@ -18,4 +18,5 @@ urlpatterns = [
         name="permission_resolve",
     ),
     path("tg/webhook", views.tg_webhook, name="tg_webhook"),
+    path("github/", views.github_settings, name="github_settings"),
 ]

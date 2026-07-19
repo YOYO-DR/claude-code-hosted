@@ -1,0 +1,45 @@
+{% extends "ui/base.html" %}
+{% block title %}GitHub · Panel{% endblock %}
+{% block content %}
+  <h1>GitHub</h1>
+  <p class="muted">
+    Pega un PAT fine-grained con <code>contents:rw</code>, <code>metadata:r</code> y
+    <code>pull_requests:rw</code> sobre los repos que quieras usar. Se guarda cifrado;
+    no se vuelve a mostrar. Los agentes podrán abrir PRs y comentar, pero <strong>no
+    mergear</strong>.
+  </p>
+
+  <form method="post" style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center">
+    {% csrf_token %}
+    <input type="password" name="token" placeholder="github_pat_…"
+           autocomplete="off" style="flex:1; min-width:320px">
+    <button type="submit">Guardar y validar</button>
+    {% if has_token %}<button type="submit" name="token" value="">Revalidar guardado</button>{% endif %}
+  </form>
+
+  {% if has_token %}<p class="muted">Estado: hay un token guardado.</p>{% endif %}
+
+  {% if result %}
+    {% if result.ok %}
+      <p class="pill" style="background:#194;color:#fff">✅ Token válido — usuario <strong>{{ result.login }}</strong></p>
+      {% if result.error %}<p class="pill" style="background:#7a4a00;color:#ffd">{{ result.error }}</p>{% endif %}
+      <h2>Repos accesibles ({{ result.repos|length }})</h2>
+      <table>
+        <thead><tr><th>Repositorio</th><th>Visibilidad</th><th>Rama base</th></tr></thead>
+        <tbody>
+          {% for r in result.repos %}
+            <tr>
+              <td><code>{{ r.full_name }}</code></td>
+              <td>{{ r.private|yesno:"privado,público" }}</td>
+              <td class="muted">{{ r.default_branch }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3" class="muted">El token no lista repos.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="pill" style="background:#c33;color:#fff">❌ Token inválido: {{ result.error }}</p>
+    {% endif %}
+  {% endif %}
+{% endblock %}

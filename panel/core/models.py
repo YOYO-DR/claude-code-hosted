@@ -62,7 +62,9 @@ class Project(TimestampedModel):
     # settings.PERMISSION_TIMEOUT_SECONDS (15 min).
     permission_timeout_seconds = models.PositiveIntegerField(null=True, blank=True)
     telegram_topic_id = models.IntegerField(null=True, blank=True)
-    github_repo = models.CharField(max_length=200, null=True, blank=True)
+    github_repo = models.CharField(max_length=200, null=True, blank=True)  # owner/repo
+    # Inyecta el MCP de GitHub a los agentes solo si está activo y hay github_repo.
+    github_enabled = models.BooleanField(default=False)
     model_profile = models.ForeignKey(
         ModelProfile, on_delete=models.PROTECT, related_name="projects"
     )
