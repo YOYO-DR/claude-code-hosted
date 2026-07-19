@@ -9,11 +9,14 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import time
 from datetime import timedelta
+from pathlib import Path
 
 import django
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "panel.settings")
 django.setup()
 
