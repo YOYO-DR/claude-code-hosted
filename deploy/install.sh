@@ -45,6 +45,13 @@ if [[ "${1:-}" == "--update" ]]; then
   fi
 
   echo "==> uv sync"
+  # Cargar /etc/panel/panel.env en el entorno para que runuser herede las
+  # vars. Necesario para que manage.py pueda cargar settings (PANEL_SECRET_KEY
+  # y demás). 'set -a' exporta todo lo que el source defina.
+  set -a
+  # shellcheck disable=SC1091
+  source /etc/panel/panel.env
+  set +a
   runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" --frozen 2>&1 | tail -3 \
     || runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" 2>&1 | tail -3
 
