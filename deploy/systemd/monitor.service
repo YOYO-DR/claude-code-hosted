@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitor de salud del panel (disco, crash-loop, heartbeat) → alertas Telegram
+After=panel-infra.service
+Wants=panel-infra.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/panel/panel.env
+Environment=DJANGO_SETTINGS_MODULE=panel.settings
+WorkingDirectory=/opt/panel
+ExecStart=/opt/panel/.venv/bin/python /opt/panel/scripts/monitor.py

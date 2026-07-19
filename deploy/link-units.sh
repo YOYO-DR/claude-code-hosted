@@ -9,6 +9,7 @@ DST="/etc/systemd/system"
 VENV="/opt/panel/.venv/bin"
 
 for unit in panel-infra.service panel.service tg-bridge.service backup.service backup.timer \
+            monitor.service monitor.timer \
             "tmux@.service" "ttyd@.service" "claude-session@.service"; do
   ln -sf "${SRC}/${unit}" "${DST}/${unit}"
 done
@@ -49,8 +50,9 @@ echo "==> Levantando el panel"
 systemctl enable --now panel.service
 systemctl restart panel.service
 
-echo "==> Backup diario"
+echo "==> Backup diario + monitor de salud"
 systemctl enable --now backup.timer
+systemctl enable --now monitor.timer
 
 # tg-bridge: solo si hay token de Telegram configurado.
 if grep -q '^PANEL_TELEGRAM_BOT_TOKEN=.\+' /etc/panel/panel.env 2>/dev/null; then
