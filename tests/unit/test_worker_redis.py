@@ -18,7 +18,6 @@ def test_worker_redis_has_no_socket_timeout():
     from workers import session_worker
 
     with patch("workers.session_worker.aioredis.from_url") as mocked:
-        mocked.return_value.connection_pool.max_connections = 10
         w = session_worker.Worker.__new__(session_worker.Worker)
         w.__init__("test-sid")
         kwargs = mocked.call_args.kwargs
@@ -27,8 +26,6 @@ def test_worker_redis_has_no_socket_timeout():
             f"brpop(timeout=5) no choque con el default de 5s; "
             f"got {kwargs.get('socket_timeout')!r}"
         )
-        # limpieza
-        w.redis.aclose  # noop si no se implementó; el mock no se conecta
 
 
 def test_consumer_make_redis_has_no_socket_timeout():
@@ -50,8 +47,11 @@ def test_channels_redis_layer_has_no_socket_timeout():
     el pool se crea en settings. Hay que cablearlo en CHANNEL_LAYERS CONFIG."""
     # settings_test sobreescribe a InMemoryChannelLayer; leer el settings real.
     import importlib
-    import panel.settings as prod_settings
-    importlib.reload(prod_settings)
+    import sys
+    # Quitar el settings_test cargado para que se importe el real.
+    for mod in [m for m in sys.modules if m.startswith("panel")]:
+        del sys.modules[mod]
+    import panel.settings as prod_settings  # noqa: PLC0415
     try:
         hosts = prod_settings.CHANNEL_LAYERS["default"]["CONFIG"]["hosts"]
         assert hosts, "CHANNEL_LAYERS no configurado en panel/settings.py"
@@ -62,5 +62,6 @@ def test_channels_redis_layer_has_no_socket_timeout():
             )
     finally:
         # Restaurar el settings de test para no contaminar otros tests.
-        import panel.settings_test
-        importlib.reload(prod_settings)
+        for mod in [m for m in sys.modules if m.startswith("panel")]:
+            del sys.modules[mod]
+        importlib.invalidate_caches()
