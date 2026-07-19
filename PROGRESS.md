@@ -394,7 +394,7 @@ Backup+restore, alertas, regresión y caos. Commits `1973d97`..`6eb41b4`.
 |------|-----------|
 | Backup diario cifrado (pg_dump + .claude) | ✅ `backup.timer` 03:30; tar AES-256; retención local 7 |
 | **Restore real en dir/DB limpia + arrancar panel** | ✅ restauró en `panel_restore_test`, `migrate --check` OK, datos intactos (6 proy, 25 ses, tokens cifrados) |
-| Backup a S3/MinIO | ⏳ cableado + retención remota; **pendiente credenciales** para probar upload (local ya funciona) |
+| Backup a S3/MinIO | ✅ bucket accesible (`claude-code-hosted` en `s3-minio-zybx86-…sslip.io`); round-trip subido→descargado→descifrado→pg_dump íntegro |
 | Alertas a topic sistema (disco/crash-loop/heartbeat) | ✅ alerta de disco 95% enviada en vivo; heartbeat marca `crashed` (unit + reboot); crash-loop por NRestarts |
 | Suite de regresión (fases 1-5) desde cero | ✅ 95 tests verdes en corrida limpia; ruff+mypy |
 | **Caos: Redis caído bajo carga** | ✅ 20s → 0 eventos perdidos, worker recupera |

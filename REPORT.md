@@ -115,8 +115,8 @@ antes de presionar RAM. Los puertos de servicios de agentes viven en 20000–299
 5. **`git push` del agente** usa `extraHeader` en argv (visible en `/proc` al
    mismo usuario `agents` momentáneamente). El clone ya evita esto (token por
    STDIN). Mitigable con un askpass por env si se endurece el modelo multi-agente.
-6. **S3/MinIO**: upload cableado y con retención, pendiente de credenciales para
-   probar en vivo (el backup local cifrado ya funciona y se restauró real).
+6. **S3/MinIO**: ✅ verificado en vivo (subida + round-trip + retención 14)
+   sobre `s3://claude-code-hosted/panel/` (endpoint MinIO vía sslip.io).
 7. **`uv sync` no instaló boto3** (quirk lock/sync); se usó `uv pip install` y se
    regeneró `uv.lock`. En un install limpio, `uv sync` desde el lock actualizado
    debería bastar.
