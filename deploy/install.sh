@@ -45,21 +45,43 @@ if [[ "${1:-}" == "--update" ]]; then
   fi
 
   echo "==> uv sync"
-  # Cargar /etc/panel/panel.env en el entorno para que runuser herede las
-  # vars. Necesario para que manage.py pueda cargar settings (PANEL_SECRET_KEY
-  # y demás). 'set -a' exporta todo lo que el source defina.
+  # Cargar /etc/panel/panel.env en el entorno. runuser -u <user> sin --login
+  # hereda el entorno del padre (donde 'set -a; source' ya exportó todo),
+  # pero depender de eso es frágil: si PAM limpia env, falla. Pasamos las
+  # vars explícitamente con `env VAR=...` para garantizar.
   set -a
   # shellcheck disable=SC1091
   source /etc/panel/panel.env
   set +a
-  runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" --frozen 2>&1 | tail -3 \
-    || runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" 2>&1 | tail -3
+
+  # Empaquetar vars de panel.env en una sola cadena KEY=VAL KEY=VAL ... para
+  # anteponerla al comando. set -a arriba ya las dejó exportadas, pero al
+  # hacer 'env PANEL_X=... ... comando', env pisa con las que le pasamos y
+  # runuser las ve. Usamos 'env' (no set) para que el orden de precedencia
+  # sea claro.
+  PANEL_ENV_ARGS=""
+  while IFS='=' read -r k v; do
+    # Saltar comentarios y líneas vacías.
+    [[ -z "$k" || "$k" =~ ^[[:space:]]*# ]] && continue
+    # Escapar comillas en v para que no rompan el eval posterior.
+    v_esc="${v//\"/\\\"}"
+    PANEL_ENV_ARGS+="\"$k=$v_esc\" "
+  done < /etc/panel/panel.env
+
+  runuser -u panel -- env HOME=/home/panel \
+    $PANEL_ENV_ARGS \
+    uv sync --project "$REPO_DIR" --frozen 2>&1 | tail -3 \
+    || runuser -u panel -- env HOME=/home/panel \
+       $PANEL_ENV_ARGS \
+       uv sync --project "$REPO_DIR" 2>&1 | tail -3
 
   echo "==> Migraciones + collectstatic"
   cd "$REPO_DIR"
   runuser -u panel -- env HOME=/home/panel \
+    $PANEL_ENV_ARGS \
     /opt/panel/.venv/bin/python manage.py migrate --noinput 2>&1 | tail -5
   runuser -u panel -- env HOME=/home/panel \
+    $PANEL_ENV_ARGS \
     /opt/panel/.venv/bin/python manage.py collectstatic --noinput 2>&1 | tail -3
 
   echo "==> Reinicio de panel.service"
