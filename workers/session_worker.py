@@ -101,7 +101,10 @@ def redis_exceptions() -> tuple[type[BaseException], ...]:
 class Worker:
     def __init__(self, sid: str) -> None:
         self.sid = sid
-        self.redis = aioredis.from_url(settings.REDIS_URL)
+        # socket_timeout=None: redis-py async usa DEFAULT_SOCKET_TIMEOUT=5s, que
+        # coincide con el `brpop(timeout=5)` y dispara TimeoutError ANTES de que
+        # el servidor responda nil. Con None el socket espera lo que haga falta.
+        self.redis = aioredis.from_url(settings.REDIS_URL, socket_timeout=None)
         self._seq = 0
         self._session: Session | None = None
         self._slug: str = ""

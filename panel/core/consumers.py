@@ -17,8 +17,9 @@ from panel.core.stream import SeqDedup
 
 def make_redis():
     """Cliente Redis async del consumer. Función aparte para que los tests
-    puedan inyectar un fake."""
-    return aioredis.from_url(settings.REDIS_URL)
+    puedan inyectar un fake. `socket_timeout=None`: evita el default de 5s de
+    redis-py async (pisa los `brpop(timeout=N)` y los pubsub.listen)."""
+    return aioredis.from_url(settings.REDIS_URL, socket_timeout=None)
 
 
 class SessionConsumer(AsyncWebsocketConsumer):
