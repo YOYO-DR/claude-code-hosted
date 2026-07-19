@@ -1,15 +1,70 @@
 #!/usr/bin/env bash
 # Fase 0 — instalacion idempotente del VPS. Seguro de correr mas de una vez.
 # Requiere: root, Ubuntu 24.04, LE_EMAIL en el entorno (o TTY interactivo).
+#
+# Sub-comandos:
+#   (sin flag)              — instalación completa (idempotente)
+#   --update                — actualiza código desde git, re-sincroniza deps,
+#                             corre migraciones, collectstatic y reinicia
+#                             panel.service. NO toca secretos, Docker, ni
+#                             paquetes del sistema.
 set -euo pipefail
 
 REPO_DIR="/opt/panel"
 PROJECTS_DIR="/srv/projects"
 TTYD_DIR="${REPO_DIR}/deploy/ttyd"
+REPO_URL="https://github.com/YOYO-DR/claude-code-hosted.git"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Este script debe correr como root." >&2
   exit 1
+fi
+
+# Rama --update: solo trae código nuevo y reinicia. Sale antes del install completo.
+if [[ "${1:-}" == "--update" ]]; then
+  echo "==> Modo --update: pull + sync + migrate + collectstatic + restart"
+  if [[ ! -d "$REPO_DIR/.git" ]]; then
+    echo "  /opt/panel no es un repo git. Clonando desde $REPO_URL ..." >&2
+    git clone "$REPO_URL" "$REPO_DIR"
+  fi
+  cd "$REPO_DIR"
+  git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
+  OLD_HEAD="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
+  echo "  HEAD antes: $OLD_HEAD"
+  git fetch --all --prune
+  # --ff-only: si divergió, abortar en vez de mezclar. Evita pisar commits
+  # locales que el operador haya hecho a mano.
+  git pull --ff-only
+  NEW_HEAD="$(git rev-parse --short HEAD)"
+  echo "  HEAD después: $NEW_HEAD"
+  if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
+    echo "  sin cambios nuevos."
+  else
+    echo "  commits nuevos:"
+    git log --oneline "${OLD_HEAD}..${NEW_HEAD}" || true
+  fi
+
+  echo "==> uv sync"
+  runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" --frozen 2>&1 | tail -3 \
+    || runuser -u panel -- env HOME=/home/panel uv sync --project "$REPO_DIR" 2>&1 | tail -3
+
+  echo "==> Migraciones + collectstatic"
+  cd "$REPO_DIR"
+  runuser -u panel -- env HOME=/home/panel \
+    /opt/panel/.venv/bin/python manage.py migrate --noinput 2>&1 | tail -5
+  runuser -u panel -- env HOME=/home/panel \
+    /opt/panel/.venv/bin/python manage.py collectstatic --noinput 2>&1 | tail -3
+
+  echo "==> Reinicio de panel.service"
+  systemctl restart panel.service
+  if systemctl is-active --quiet panel.service; then
+    echo "  panel.service: active"
+  else
+    echo "  AVISO: panel.service NO quedó activo tras restart. Revisa 'journalctl -u panel'." >&2
+    exit 2
+  fi
+  echo "OK — update completo."
+  exit 0
 fi
 
 echo "==> Paquetes base"
