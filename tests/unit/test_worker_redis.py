@@ -42,3 +42,25 @@ def test_consumer_make_redis_has_no_socket_timeout():
             f"consumer redis client debe usar socket_timeout=None; "
             f"got {kwargs.get('socket_timeout')!r}"
         )
+
+
+def test_channels_redis_layer_has_no_socket_timeout():
+    """CHANNEL_LAYERS (channels_redis) también cae al socket_timeout en su
+    pubsub.listen() — y este NO se puede monkey-patch en el consumer porque
+    el pool se crea en settings. Hay que cablearlo en CHANNEL_LAYERS CONFIG."""
+    # settings_test sobreescribe a InMemoryChannelLayer; leer el settings real.
+    import importlib
+    import panel.settings as prod_settings
+    importlib.reload(prod_settings)
+    try:
+        hosts = prod_settings.CHANNEL_LAYERS["default"]["CONFIG"]["hosts"]
+        assert hosts, "CHANNEL_LAYERS no configurado en panel/settings.py"
+        for host in hosts:
+            assert host.get("socket_timeout") is None, (
+                f"Cada host de CHANNEL_LAYERS debe llevar socket_timeout=None; "
+                f"got {host.get('socket_timeout')!r}"
+            )
+    finally:
+        # Restaurar el settings de test para no contaminar otros tests.
+        import panel.settings_test
+        importlib.reload(prod_settings)

@@ -83,7 +83,10 @@ REDIS_URL = _env("PANEL_REDIS_URL", "redis://127.0.0.1:6379/0")
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [REDIS_URL]},
+        # socket_timeout=None: redis-py async trae DEFAULT_SOCKET_TIMEOUT=5s
+        # que pisa los pubsub.listen() de channels_redis (mismo bug que en el
+        # worker). Sin esto el panel se cae con "Timeout reading from 127.0.0.1".
+        "CONFIG": {"hosts": [{"address": REDIS_URL, "socket_timeout": None}]},
     }
 }
 
