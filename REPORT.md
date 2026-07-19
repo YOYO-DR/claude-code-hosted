@@ -102,9 +102,13 @@ antes de presionar RAM. Los puertos de servicios de agentes viven en 20000–299
 
 ## 6. Deudas conocidas
 
-1. **Ruido de `brpop`**: el worker loguea `Timeout reading from 127.0.0.1:6379`
+1. ~~**Ruido de `brpop`**: el worker loguea `Timeout reading from 127.0.0.1:6379`
    en polls idle (socket timeout < bloqueo de 5s). No afecta la entrega; conviene
-   afinar el health-check/socket del cliente Redis.
+   afinar el health-check/socket del cliente Redis.~~ **Resuelto** (`979c2ff`,
+   `144b45a`): `socket_timeout=None` en `aioredis.from_url(...)` del worker, del
+   consumer y del `CHANNEL_LAYERS`. Era un bug activo, no ruido — bloqueaba
+   toda entrega de mensajes tras 5s de idle. Cubierto por
+   `tests/unit/test_worker_redis.py`.
 2. **CLAUDE.md de repos clonados**: el renderer sobrescribe el `CLAUDE.md` del
    repo con el del proyecto (DB). `.claude/` y `.mcp.json` sí se excluyen del git.
    Si un repo trae su propio CLAUDE.md, se pierde a favor del de plataforma.
