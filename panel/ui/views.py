@@ -57,6 +57,12 @@ def logout_view(request):
     return redirect("login")
 
 
+def _serve_spa_for(request, _spa_path_unused):
+    """FASE E.2: rutas legacy GET (sessions, permissions, github) caen al
+    SPA. React Router resuelve el path. POSTs legacy siguen por compatibilidad."""
+    return spa_catch_all(request, request.path.lstrip("/"))
+
+
 def _verified_required(request):
     return request.user.is_authenticated and request.user.is_verified()
 
@@ -65,29 +71,14 @@ def _verified_required(request):
 def session_list(request):
     if not request.user.is_verified():
         return redirect("login")
-    sessions = Session.objects.select_related("project").order_by("-created_at")[:100]
-    projects = Project.objects.filter(status=Project.Status.ACTIVE)
-    return render(request, "ui/session_list.html", {"sessions": sessions, "projects": projects})
+    return _serve_spa_for(request, "")
 
 
 @login_required
 def session_detail(request, sid):
     if not request.user.is_verified():
         return redirect("login")
-    session = get_object_or_404(Session.objects.select_related("project__model_profile"), id=sid)
-    events = session.events.order_by("seq")
-    last_event = events.last()
-    last_seq = last_event.seq if last_event is not None else 0
-    return render(
-        request,
-        "ui/session_detail.html",
-        {
-            "session": session,
-            "events": events,
-            "last_seq": last_seq,
-            "needs_restart": session_svc.needs_restart(session),
-        },
-    )
+    return _serve_spa_for(request, "")
 
 
 @login_required
@@ -291,14 +282,7 @@ def mcp_toggle(request, mcp_id):
 def permission_queue(request):
     if not request.user.is_verified():
         return redirect("login")
-    # D11: query única filtrada por sesión viva + expires_at — vista y badge
-    # usan `perm_svc.live_pending_qs()` para no divergir.
-    pending = (
-        perm_svc.live_pending_qs()
-        .select_related("session__project")
-        .order_by("expires_at")
-    )
-    return render(request, "ui/permission_queue.html", {"pending": pending})
+    return _serve_spa_for(request, "")
 
 
 @login_required
@@ -344,33 +328,26 @@ def permission_resolve(request, request_id):
 
 @login_required
 def github_settings(request):
-    """Ajustes de GitHub: pegar el token (por frontend), validarlo (autentica +
-    lista repos) y guardarlo cifrado en BD. El token nunca se re-muestra."""
+    """FASE E.2: el SPA cubre /github con su UI completa. Mantenemos esta
+    ruta en urls.py por si curl/admin/scripts hacen POST directo."""
     if not request.user.is_verified():
         return redirect("login")
-    result = None
     if request.method == "POST":
         token = (request.POST.get("token") or "").strip()
+        result = None
         if token:
             result = gh.validate(token)
             if result["ok"]:
                 gh.store_token(token)
         else:
-            # revalidar el token ya guardado
             stored = gh.get_token()
             result = (
                 gh.validate(stored)
                 if stored
                 else {"ok": False, "error": "no hay token guardado", "repos": []}
             )
-    elif gh.has_token():
-        stored = gh.get_token()
-        result = gh.validate(stored) if stored else None
-    return render(
-        request,
-        "ui/github.html",
-        {"has_token": gh.has_token(), "result": result},
-    )
+        return redirect("/github")
+    return redirect("/github")
 
 
 @csrf_exempt
@@ -447,11 +424,13 @@ def index_spa_or_legacy(request):
     spa = _serve_spa_index()
     if spa is not None:
         return spa
-    # Fallback al listado de sesiones legacy — exige auth.
-    if not request.user.is_authenticated or not request.user.is_verified():
-        return redirect("login")
-    sessions = Session.objects.select_related("project").order_by("-created_at")[:200]
-    return render(request, "ui/session_list.html", {"sessions": sessions})
+    # FASE E.2: el template ui/session_list.html ya no existe. Sin dist/
+    # devolvemos 503 con instrucción de buildear.
+    return HttpResponse(
+        "SPA no construido. Ejecuta `cd panel/ui/spa && npm run build`.",
+        status=503,
+        content_type="text/plain",
+    )
 
 
 def spa_catch_all(request, spa_path: str):
