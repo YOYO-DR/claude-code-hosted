@@ -2,10 +2,16 @@
 //
 // Chat: discriminated union UIEvent v1 por kind (FASE B).
 // Panel lateral: placeholders (FASE C.5 archivos+diff, C.6 rama).
+//
+// FIX UX.6/UX.7/UX.8 (2026-07-20):
+// - backlog via useQuery (clave estable, sin re-runs por refetch de sessQ)
+// - eco local con key única de BubbleView (`bubble.user` en styles.css)
+// - agrupado de deltas sin tool_use_id reusando la última key de stream
+//   del mismo kind (vía streamState ref)
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
 import type { UIEvent, UIEventKind } from "@/types/uievents";
 import { ProjectTree, ProjectDiff } from "@/components/ProjectTree";
@@ -25,9 +31,14 @@ interface Bubble {
   raw: RawEventMessage;
   ui: UIEvent | null;
   result?: RawEventMessage;
-  // Para agrupación: el primer evento del grupo lleva la key del grupo;
-  // los deltas subsiguientes actualizan el mismo Bubble.
   groupKey: string;
+}
+
+// Estado de stream compartido: deltas consecutivos del mismo kind
+// (agent_text o agent_thinking) sin tool_use_id se agrupan en una sola key.
+interface StreamState {
+  key: string | null;
+  kind: UIEventKind | null;
 }
 
 function useSession(id: string) {
@@ -37,53 +48,80 @@ function useSession(id: string) {
   });
 }
 
-/** Agrupa eventos del SDK en bubbles por bloque/turno.
+function useSessionEvents(sid: string) {
+  return useQuery({
+    queryKey: ["session-events", sid],
+    queryFn: () =>
+      api<RawEventMessage[]>(`/api/v1/sessions/${sid}/events/?limit=500`),
+    enabled: !!sid,
+    staleTime: Infinity, // el WS entrega lo nuevo, no necesitamos refetch
+  });
+}
 
-  Reglas:
-  - agent_text + stream.content_block_delta (text) → 1 bubble por bloque
-    (el primer evento crea, los siguientes actualizan el mismo).
-  - agent_thinking + system.thinking_tokens → 1 bubble por bloque.
-  - tool_call → 1 bubble; tool_result del mismo tool_use_id → actualiza el
-    mismo bubble.
-  - run_result, error, session_status, git_branch → 1 bubble cada uno.
-  - user (mensaje del operador) → 1 bubble por envío, agrupadas por turnId.
+/** Genera la groupKey de un evento.
+  - agent_text + tool_use_id → text:<tuid> (1 bubble por bloque macro)
+  - agent_text sin tool_use_id (delta de stream) → reusa la última key
+    de stream del mismo kind (vía streamState)
+  - tool_call/tool_result → tool:<tuid>
+  - permission_request → perm:<id>
+  - user → user:<turnId|seq>
+  - resto → evt:<seq>
 */
-function groupKey(ev: RawEventMessage, ui: UIEvent | null, turnId?: string): string {
-  if (ui?.kind === "agent_text" || ui?.kind === "agent_thinking") {
-    const p = ui.payload as { tool_use_id?: string };
-    return `text:${p.tool_use_id || ev.seq}`; // fallback a seq si no hay tuid
+function computeGroupKey(
+  ev: RawEventMessage,
+  ui: UIEvent,
+  turnId: string | undefined,
+  stream: StreamState,
+): { key: string; nextStream: StreamState } {
+  const p = ui.payload as { tool_use_id?: string; id?: string };
+  if (ui.kind === "agent_text" || ui.kind === "agent_thinking") {
+    if (p.tool_use_id) {
+      const k = `text:${p.tool_use_id}`;
+      return { key: k, nextStream: { key: null, kind: null } };
+    }
+    if (stream.kind === ui.kind && stream.key) {
+      return { key: stream.key, nextStream: stream };
+    }
+    const k = `stream:${ui.kind}:${ev.seq}`;
+    return { key: k, nextStream: { key: k, kind: ui.kind } };
   }
-  if (ui?.kind === "tool_call" || ui?.kind === "tool_result") {
-    const p = ui.payload as { tool_use_id?: string };
-    return `tool:${p.tool_use_id || ev.seq}`;
+  if (ui.kind === "tool_call" || ui.kind === "tool_result") {
+    const k = `tool:${p.tool_use_id || ev.seq}`;
+    return { key: k, nextStream: { key: null, kind: null } };
   }
-  if (ui?.kind === "permission_request") {
-    return `perm:${(ui.payload as { id?: string }).id || ev.seq}`;
+  if (ui.kind === "permission_request") {
+    return { key: `perm:${p.id || ev.seq}`, nextStream: { key: null, kind: null } };
   }
-  if (ui?.kind === "user") {
-    return `user:${turnId || ev.seq}`;
+  if (ui.kind === "user") {
+    return { key: `user:${turnId || ev.seq}`, nextStream: { key: null, kind: null } };
   }
-  return `evt:${ev.seq}`;
+  return { key: `evt:${ev.seq}`, nextStream: { key: null, kind: null } };
 }
 
 function ingestEvent(
   prev: Bubble[],
   msg: RawEventMessage,
+  stream: StreamState,
   turnId?: string,
-): Bubble[] {
-  if (!msg.ui_event) return prev; // eventos sin UI (streaming crudo) se ignoran
+): { next: Bubble[]; stream: StreamState } {
+  if (!msg.ui_event) return { next: prev, stream };
   const ui = msg.ui_event;
-  const key = groupKey(msg, ui, turnId);
-  // tool_result: actualiza el tool_call existente en vez de crear uno nuevo
+  const { key, nextStream } = computeGroupKey(msg, ui, turnId, stream);
+  // tool_result → actualiza el tool_call existente
   if (ui.kind === "tool_result") {
     const idx = prev.findIndex((b) => b.groupKey === key && b.kind === "tool_call");
     if (idx >= 0) {
       const copy = prev.slice();
       copy[idx] = { ...copy[idx], result: msg, ui: { ...ui, kind: "tool_result" } };
-      return copy;
+      return { next: copy, stream: nextStream };
     }
+    // tool_call aún no ha llegado → crear bubble tool_result igual
+    return {
+      next: [...prev, { key, groupKey: key, kind: ui.kind, raw: msg, ui }],
+      stream: nextStream,
+    };
   }
-  // tool_call con tool_result existente: actualiza
+  // tool_call existente: actualiza raw/ui preservando result
   if (ui.kind === "tool_call") {
     const idx = prev.findIndex((b) => b.groupKey === key);
     if (idx >= 0) {
@@ -93,31 +131,33 @@ function ingestEvent(
         ...existing,
         raw: msg,
         ui,
-        result: existing.result, // preserva el result si ya estaba
+        result: existing.result,
       };
-      return copy;
+      return { next: copy, stream: nextStream };
     }
   }
-  // agent_text o agent_thinking: actualiza el mismo grupo
+  // agent_text/agent_thinking en mismo grupo → merge por acumulación de texto
   if (ui.kind === "agent_text" || ui.kind === "agent_thinking") {
     const idx = prev.findIndex((b) => b.groupKey === key);
     if (idx >= 0) {
       const copy = prev.slice();
-      // Actualiza el payload con el último (texto acumula deltas)
-      const merged: UIEvent = {
-        ...ui,
-        payload: { ...ui.payload, ...(prev[idx].ui?.payload ?? {}) },
-        seq: msg.seq,
-      };
+      const prevUi = prev[idx].ui;
+      const prevText =
+        prevUi && (prevUi.kind === "agent_text" || prevUi.kind === "agent_thinking")
+          ? String((prevUi.payload as { text?: string }).text ?? "")
+          : "";
+      const newText = String((ui.payload as { text?: string }).text ?? "");
+      const mergedPayload = { ...ui.payload, text: prevText + newText };
+      const merged: UIEvent = { ...ui, payload: mergedPayload, seq: msg.seq };
       copy[idx] = { ...copy[idx], raw: msg, ui: merged };
-      return copy;
+      return { next: copy, stream: nextStream };
     }
   }
   // Cualquier otro: append nuevo
-  return [
-    ...prev,
-    { key, groupKey: key, kind: ui.kind, raw: msg, ui },
-  ];
+  return {
+    next: [...prev, { key, groupKey: key, kind: ui.kind, raw: msg, ui }],
+    stream: nextStream,
+  };
 }
 
 function useSessionIdFromPath(): string {
@@ -129,65 +169,83 @@ function useSessionIdFromPath(): string {
 export function SessionPage() {
   const sid = useSessionIdFromPath();
   const sessQ = useSession(sid);
+  const eventsQ = useSessionEvents(sid);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [wsState, setWsState] = useState<string>("connecting");
   const [input, setInput] = useState("");
   const [tab, setTab] = useState<"archivos" | "cambios" | "rama">("archivos");
   const wsRef = useRef<ReturnType<typeof openSessionWs> | null>(null);
   const seenSeq = useRef<Set<number>>(new Set());
+  const streamRef = useRef<StreamState>({ key: null, kind: null });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const bubblesRef = useRef<Bubble[]>([]);
 
+  // Mantener ref sincronizada con bubbles (para usar dentro del WS onEvent
+  // sin provocar re-renders innecesarios).
   useEffect(() => {
-    if (!sessQ.data) return;
+    bubblesRef.current = bubbles;
+  }, [bubbles]);
+
+  // FIX UX.6: backlog via useQuery con clave estable.
+  // Se sincroniza UNA VEZ al montar (o al cambiar de sid), no en cada
+  // re-render. El WS entrega los eventos nuevos.
+  useEffect(() => {
+    if (!sid) return;
     seenSeq.current.clear();
+    streamRef.current = { key: null, kind: null };
     setBubbles([]);
-    // FASE UX.1: cargar el backlog ANTES de abrir el WS. Si el WS ya
-    // envió los mismos eventos, dedup por seq los ignora.
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await api<RawEventMessage[]>(
-          `/api/v1/sessions/${sid}/events/?limit=500`,
-        );
-        if (cancelled) return;
-        setBubbles((prev) => {
-          let next = prev;
-          for (const ev of r) {
-            if (seenSeq.current.has(ev.seq)) continue;
-            seenSeq.current.add(ev.seq);
-            next = ingestEvent(next, ev);
-          }
-          return next;
-        });
-      } catch (err) {
-        console.error("[chat] backlog fetch failed", err);
+    if (eventsQ.data) {
+      const r = eventsQ.data;
+      const seen = new Set<number>();
+      let stream: StreamState = { key: null, kind: null };
+      let next: Bubble[] = [];
+      for (const ev of r) {
+        if (seen.has(ev.seq)) continue;
+        seen.add(ev.seq);
+        seenSeq.current.add(ev.seq);
+        const out = ingestEvent(next, ev, stream);
+        next = out.next;
+        stream = out.stream;
       }
-    })();
+      streamRef.current = stream;
+      setBubbles(next);
+    }
+    // Solo al montar o cambiar de sid; el refetch de useQuery
+    // actualiza `eventsQ.data` pero solo aplicamos si `seenSeq.current.size === 0`
+    // (es decir, primera carga).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sid, eventsQ.dataUpdatedAt === 0]);
+
+  // WS: abre siempre, dedupe por seenSeq, suma al state existente.
+  useEffect(() => {
+    if (!sid || !sessQ.data) return;
     const ws = openSessionWs(
       sid,
       {
         onEvent: (msg) => {
           if (seenSeq.current.has(msg.seq)) return;
           seenSeq.current.add(msg.seq);
-          setBubbles((prev) => ingestEvent(prev, msg));
+          setBubbles((prev) => {
+            const out = ingestEvent(prev, msg, streamRef.current);
+            streamRef.current = out.stream;
+            return out.next;
+          });
         },
         onStateChange: setWsState,
       },
-      // last_seq = max seq visto (backlog + WS entrantes)
-      // Para evitar duplicados, abrimos WS con last_seq = max(seenSeq) —
-      // pero el backlog ya populó seenSeq, así que el WS nos manda solo
-      // lo nuevo. Si el WS abre antes de que termine el fetch del backlog,
-      // algunos eventos podrían llegar dos veces (dedup los ignora).
-      seenSeq.current.size,
+      // last_seq = max visto (0 al inicio = WS envía todo y dedup filtra)
+      seenSeq.current.size === 0
+        ? 0
+        : Math.max(...Array.from(seenSeq.current)),
     );
     wsRef.current = ws;
     return () => {
-      cancelled = true;
       ws.close();
       wsRef.current = null;
     };
   }, [sid, sessQ.data]);
 
+  // Auto-scroll al fondo al cambiar el número de bubbles.
   useEffect(() => {
     const el = scrollerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -200,15 +258,12 @@ export function SessionPage() {
         method: "POST",
         body: { text },
       }),
-    // FASE UX.2: eco local. Al enviar, añadimos inmediatamente un bubble
-    // "user" con el texto para que el usuario vea su mensaje sin esperar
-    // a que el WS lo confirme. El WS después puede traer un evento user
-    // duplicado — el dedup por seq lo maneja (y como el eco usa un turnId
-    // sintético sin seq, no choca con el user del WS).
+    // FIX UX.2/UX.7: eco local con seq negativo y groupKey estable
+    // (user:<turnId>) — siempre crea un Bubble único visible.
     onMutate: (text) => {
       const turnId = `local-${Date.now()}`;
       const stub: RawEventMessage = {
-        seq: -Date.now(), // seq negativo = eco local (no choca con seq reales)
+        seq: -Date.now(),
         type: "user",
         payload: { text },
         ui_event: {
@@ -221,8 +276,11 @@ export function SessionPage() {
         },
         ts: new Date().toISOString(),
       };
-      setBubbles((prev) => ingestEvent(prev, stub, turnId));
-      // Auto-scroll al fondo al añadir.
+      setBubbles((prev) => {
+        const out = ingestEvent(prev, stub, streamRef.current, turnId);
+        streamRef.current = out.stream;
+        return out.next;
+      });
       setTimeout(() => {
         const el = scrollerRef.current;
         if (el) el.scrollTop = el.scrollHeight;
@@ -268,7 +326,7 @@ export function SessionPage() {
         <ModelSelector slug={sess.project_slug} />
         <span>
           Estado:{" "}
-          <span style={{ border: "1px solid var(--border)", padding: "0 0.4rem", borderRadius: 4 }}>
+          <span style={{ border: "1px solid var(--border)", padding: "0 0 0.4rem", borderRadius: 4 }}>
             {sess.status}
           </span>
         </span>
@@ -375,21 +433,21 @@ function BubbleView({
   if (!ui) return null;
   const p = ui.payload as Record<string, unknown>;
   switch (ui.kind) {
-    case "agent_text":
+    case "agent_text": {
+      const text = String(p.text ?? "");
+      const streaming = Boolean(p.streaming);
       return (
         <div className="bubble agent-text">
-          <span>{String(p.text ?? "")}</span>
-          {p.streaming ? <span style={{ opacity: 0.5 }}>▍</span> : null}
-          {p.from_user ? (
-            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>(usuario)</div>
-          ) : null}
+          <span style={{ whiteSpace: "pre-wrap" }}>{text}</span>
+          {streaming && !text.endsWith("▍") ? <span style={{ opacity: 0.5 }}>▍</span> : null}
         </div>
       );
+    }
     case "agent_thinking":
       return (
         <details className="bubble agent-thinking">
           <summary>pensando…</summary>
-          <pre>{String(p.text ?? "")}</pre>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{String(p.text ?? "")}</pre>
         </details>
       );
     case "tool_call": {
@@ -409,6 +467,13 @@ function BubbleView({
         </div>
       );
     }
+    case "user":
+      return (
+        <div className="bubble user">
+          <span style={{ opacity: 0.6, fontSize: "0.85em" }}>tú:</span>{" "}
+          <span style={{ whiteSpace: "pre-wrap" }}>{String(p.text ?? "")}</span>
+        </div>
+      );
     case "permission_request": {
       const id = String(p.id ?? "");
       return (
@@ -461,13 +526,6 @@ function BubbleView({
           {p.dirty ? <span style={{ color: "var(--err-fg)" }}> ● dirty</span> : null}
         </div>
       );
-    case "user":
-      return (
-        <div className="bubble user">
-          <span style={{ opacity: 0.6, fontSize: "0.85em" }}>tú:</span>{" "}
-          <span>{String(p.text ?? "")}</span>
-        </div>
-      );
     case "error":
       return (
         <div className="bubble error">{String(p.message ?? "error")}</div>
@@ -484,153 +542,79 @@ function ToolResultView({ ui }: { ui: UIEvent }) {
   return (
     <div className={`bubble tool-result ${ok ? "" : "error"}`} style={{ marginTop: "0.4rem" }}>
       <strong>{ok ? "OK" : "ERROR"}</strong>
-      <pre>{typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "", null, 2)}</pre>
+      <pre style={{ maxHeight: 200, overflow: "auto" }}>
+        {typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? null, null, 2)}
+      </pre>
     </div>
   );
 }
 
-// Lee el estado git del proyecto (rama + dirty). Endpoint ligero: solo
-// ejecuta `git rev-parse --abbrev-ref HEAD` y `git status --porcelain`.
-// El watcher en vivo (FASE C.6) ya publica eventos git_branch; este
-// componente es el snapshot al cargar la pestaña.
+// Selector de modelo (FASE D.2) y RamaTab (FASE C.6) — definidos abajo.
+
 function RamaTab({ slug }: { slug: string }) {
-  type BranchResp = { branch: string; dirty: boolean };
-  const q = useQuery({
-    queryKey: ["branch", slug],
-    queryFn: async () => {
-      // Reusamos el diff endpoint: si dirty, sabemos que hay cambios;
-      // el branch lo leemos con un endpoint ligero. Como no tenemos
-      // /api/v1/projects/<slug>/branch/ en backend, derivamos del diff.
-      // El diff devuelve `path: null` cuando es global; si dirty=true,
-      // asumimos rama actual. (Mejorable con un endpoint dedicado.)
-      const d = await api<{ path: string | null; dirty: boolean }>(
-        `/api/v1/projects/${slug}/diff/`,
-      );
-      return { branch: "(actual)", dirty: d.dirty } as BranchResp;
-    },
-    enabled: !!slug,
-    refetchInterval: 5000,
+  // Placeholder simple; FASE C.6 mostrará la rama actual y cambios.
+  const { data } = useQuery({
+    queryKey: ["git-branch", slug],
+    queryFn: () => api<{ branch: string; dirty: boolean }>(`/api/v1/projects/${slug}/git/`),
+    refetchInterval: 5_000,
   });
-  if (q.isLoading) return <p className="meta">Leyendo estado git…</p>;
-  if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
-  const d = q.data;
-  if (!d) return null;
   return (
     <div>
-      <div>
-        rama: <code>{d.branch}</code>{" "}
-        {d.dirty
-          ? <span style={{ color: "var(--err-fg)" }}>● dirty</span>
-          : <span style={{ color: "var(--ok-fg)" }}>✓ clean</span>}
-      </div>
-      <p className="meta" style={{ marginTop: "0.4rem" }}>
-        El watcher emite eventos <code>git_branch</code> en el chat en vivo
-        cuando la rama o el dirty cambia.
+      <p>
+        Rama: <code>{data?.branch ?? "?"}</code>
+        {data?.dirty ? <span style={{ color: "var(--err-fg)" }}> ● dirty</span> : null}
       </p>
     </div>
   );
 }
 
-
-// ---------- FASE D.2: Selector de modelo en chat ----------
-//
-// Dropdown con los ModelProfile disponibles. Cambiar de modelo:
-// 1. POST /api/v1/projects/<slug>/model/ {model_profile_id} → actualiza BD
-// 2. Devuelve {needs_restart: true} → el banner "Reinicio requerido"
-// 3. El usuario hace click en "Reiniciar" → POST /sessions/<id>/stop/
-//    y luego navega a /projects/<slug>/start/ (legacy POST) que crea
-//    nueva sesión con el nuevo modelo.
-//
-// En el MVP el "Reiniciar" navega a /projects/<slug>/ — la vista de
-// proyectos (legacy) tiene el botón Start que crea la nueva sesión.
-
-interface Model {
-  id: number;
-  name: string;
-  provider: string;
-  model: string;
-  has_token: boolean;
-}
-
-interface Project {
-  slug: string;
-  model_profile: Model;
-  model_profile_id: number;
-}
-
+// Selector de modelo (FASE D.2)
 function ModelSelector({ slug }: { slug: string }) {
-  const modelsQ = useQuery({
+  const { data: profiles } = useQuery({
     queryKey: ["models"],
-    queryFn: () => api<Model[]>("/api/v1/models/"),
+    queryFn: () => api<Array<{ id: number; name: string; provider: string }>>(`/api/v1/models/`),
   });
-  const projectQ = useQuery({
+  const { data: project } = useQuery({
     queryKey: ["project", slug],
-    queryFn: () => api<Project>(`/api/v1/projects/${slug}/`),
+    queryFn: () => api<{ model_profile: number | null; needs_restart?: boolean }>(`/api/v1/projects/${slug}/`),
   });
+  const [msg, setMsg] = useState<string | null>(null);
   const qc = useQueryClient();
-  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-
-  const changeMut = useMutation({
-    mutationFn: (modelProfileId: number) =>
-      api<{ ok: boolean; old_model_profile: number; new_model_profile: number; needs_restart: boolean }>(
-        `/api/v1/projects/${slug}/model/`,
-        { method: "POST", body: { model_profile_id: modelProfileId } },
-      ),
+  const mut = useMutation({
+    mutationFn: (modelId: number) =>
+      api(`/api/v1/projects/${slug}/model/`, {
+        method: "POST",
+        body: { model_id: modelId },
+      }),
     onSuccess: (data) => {
-      if (data.ok) {
-        if (data.needs_restart) {
-          setMsg({ kind: "ok", text: "Modelo cambiado — reinicia la sesión para aplicar." });
-        } else {
-          setMsg({ kind: "ok", text: "Modelo actualizado." });
-        }
-        void qc.invalidateQueries({ queryKey: ["project", slug] });
-      } else {
-        setMsg({ kind: "err", text: "Error cambiando modelo" });
-      }
+      const d = data as { needs_restart?: boolean };
+      setMsg(d.needs_restart ? "Modelo cambiado — reinicia la sesión para aplicar" : "Modelo actualizado");
+      void qc.invalidateQueries({ queryKey: ["project", slug] });
     },
-    onError: (err: unknown) => {
-      if (err instanceof ApiError) {
-        const body = (err.body ?? {}) as { error?: string };
-        setMsg({ kind: "err", text: body.error ?? `Error ${err.status}` });
-      } else {
-        setMsg({ kind: "err", text: String(err) });
-      }
-    },
+    onError: (e) => setMsg(String(e)),
   });
-
-  if (modelsQ.isLoading || projectQ.isLoading) return <span className="meta">modelo…</span>;
-  if (modelsQ.error || projectQ.error) return null;
-  const models = modelsQ.data ?? [];
-  const project = projectQ.data;
-  if (!project || models.length === 0) return null;
-
+  if (!profiles) return null;
+  const current = project?.model_profile;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
-      <label style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-        <span className="meta">modelo:</span>
-        <select
-          value={project.model_profile_id}
-          disabled={changeMut.isPending}
-          onChange={(e) => {
-            const newId = Number(e.target.value);
-            if (newId !== project.model_profile_id) {
-              changeMut.mutate(newId);
-            }
-          }}
-          >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name} ({m.provider})
-              {!m.has_token ? " — sin token" : ""}
-            </option>
-          ))}
-        </select>
-      </label>
+    <span>
+      <span style={{ marginRight: "0.3rem" }}>modelo:</span>
+      <select
+        value={current ?? ""}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (!Number.isNaN(v)) mut.mutate(v);
+        }}
+        disabled={mut.isPending}
+      >
+        {profiles.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} ({p.provider})
+          </option>
+        ))}
+      </select>
       {msg && (
-        <span className={`msg ${msg.kind === "ok" ? "info" : "error"}`} style={{ padding: "0.2rem 0.5rem" }}>
-          {msg.text}
-        </span>
+        <span style={{ marginLeft: "0.5rem", color: "var(--muted)", fontSize: "0.85em" }}>{msg}</span>
       )}
-    </div>
+    </span>
   );
 }

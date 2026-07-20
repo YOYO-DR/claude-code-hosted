@@ -238,6 +238,13 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 .bubble.run-result.error { border-left-color: var(--err-fg); color: var(--err-fg); }
 .bubble.session-status, .bubble.git-branch { opacity: 0.7; }
 .bubble.error { border-left-color: var(--err-fg); background: var(--err-bg); color: var(--err-fg); }
+.bubble.user {
+  border-left-color: #0969da;
+  background: #f6f8fa;
+  margin-left: auto;
+  max-width: 80%;
+  text-align: left;
+}
 .bubble summary { cursor: pointer; opacity: 0.8; }
 
 .tag {
