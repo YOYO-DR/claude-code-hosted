@@ -28,6 +28,7 @@ interface Diff {
   path: string | null;
   diff: string;
   dirty: boolean;
+  not_a_repo?: boolean;
 }
 
 function fmtSize(b: number): string {
@@ -133,6 +134,9 @@ export function ProjectDiff({ slug }: { slug: string }) {
   if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
   const d = q.data;
   if (!d) return null;
+  if (d.not_a_repo) {
+    return <p className="meta">El proyecto no es un repo git — sin diff.</p>;
+  }
   return (
     <div>
       <div className="meta">

@@ -158,7 +158,10 @@ def project_file(request: HttpRequest, slug: str) -> JsonResponse:
 @require_verified_json
 def project_diff(request: HttpRequest, slug: str) -> JsonResponse:
     """GET /api/v1/projects/<slug>/diff?path=<rel opcional>
-    `git diff` unstaged+staged del proyecto (o de un archivo concreto)."""
+    `git diff` unstaged+staged del proyecto (o de un archivo concreto).
+    Si el path NO es un repo git, devuelve 200 con `not_a_repo=true` y
+    diff vacío (en vez de 500) — el cliente SPA puede mostrar un
+    placeholder limpio."""
     p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
     rel = request.GET.get("path")
     if rel:
@@ -176,7 +179,14 @@ def project_diff(request: HttpRequest, slug: str) -> JsonResponse:
         return JsonResponse({"error": "git diff timeout"}, status=504)
     except FileNotFoundError:
         return JsonResponse({"error": "git no instalado"}, status=500)
-    if proc.returncode != 0:
+    # Detectar "no es repo" antes de devolver 500. git retorna rc=128 con
+    # stderr "fatal: not a git repository (or any of the parent
+    # directories): .git" cuando el path no es un repo.
+    not_a_repo = (
+        proc.returncode != 0
+        and "not a git repository" in (proc.stderr or "")
+    )
+    if proc.returncode != 0 and not not_a_repo:
         return JsonResponse({
             "error": proc.stderr.strip() or f"git diff rc={proc.returncode}",
         }, status=500)
@@ -185,6 +195,13 @@ def project_diff(request: HttpRequest, slug: str) -> JsonResponse:
         ["git", "-C", p.path, "status", "--porcelain"],
         capture_output=True, text=True, timeout=10,
     )
+    if not_a_repo:
+        return JsonResponse({
+            "path": rel or None,
+            "diff": "",
+            "dirty": False,
+            "not_a_repo": True,
+        })
     return JsonResponse({
         "path": rel or None,
         "diff": proc.stdout,
