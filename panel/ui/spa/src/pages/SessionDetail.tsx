@@ -136,20 +136,13 @@ function ingestEvent(
       return { next: copy, stream: nextStream };
     }
   }
-  // agent_text/agent_thinking en mismo grupo → merge por acumulación de texto
+  // agent_text/agent_thinking en mismo grupo → reemplazar (cada delta
+  // del WS trae el buffer acumulado del SDK, no un suffix incremental).
   if (ui.kind === "agent_text" || ui.kind === "agent_thinking") {
     const idx = prev.findIndex((b) => b.groupKey === key);
     if (idx >= 0) {
       const copy = prev.slice();
-      const prevUi = prev[idx].ui;
-      const prevText =
-        prevUi && (prevUi.kind === "agent_text" || prevUi.kind === "agent_thinking")
-          ? String((prevUi.payload as { text?: string }).text ?? "")
-          : "";
-      const newText = String((ui.payload as { text?: string }).text ?? "");
-      const mergedPayload = { ...ui.payload, text: prevText + newText };
-      const merged: UIEvent = { ...ui, payload: mergedPayload, seq: msg.seq };
-      copy[idx] = { ...copy[idx], raw: msg, ui: merged };
+      copy[idx] = { ...copy[idx], raw: msg, ui };
       return { next: copy, stream: nextStream };
     }
   }
