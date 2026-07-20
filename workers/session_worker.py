@@ -112,6 +112,8 @@ class Worker:
         # FASE B: acumulador de deltas de stream_event por content_block_index.
         from panel.core.events.normalize import StreamAccumulator
         self._stream_acc = StreamAccumulator()
+        # FASE C.6: cache del último git_branch emitido (branch+'|'+dirty).
+        self._last_git_state: str | None = None
 
     async def run(self) -> None:
         session = await self._load_session()
@@ -222,6 +224,98 @@ class Worker:
             await sync_to_async(self._publish)(event)
         except Exception as exc:  # noqa: BLE001
             log.warning("publish falló (evento ya en PG): %s", exc)
+        # FASE C.6: si el evento puede haber mutado el repo, emite UIEvent
+        # git_branch si la rama o el dirty cambió. Polling barato
+        # (rev-parse + status --porcelain, <50ms típico).
+        await self._maybe_emit_git_branch(session, sdk_msg)
+
+    async def _maybe_emit_git_branch(self, session: Session, sdk_msg: object) -> None:
+        """FASE C.6: tras eventos que PUEDEN mover el repo (Bash con git,
+        Edit, Write), corre `git rev-parse --abbrev-ref HEAD + git status
+        --porcelain` y, si rama o dirty cambiaron respecto al cache local,
+        emite un UIEvent `git_branch {branch, dirty}` por Redis (no se
+        persiste en BD: es estado derivado, se puede recomputar con el
+        path del proyecto).
+
+        El cache vive en `self._last_git_state` (rama+'|'+str(dirty)) para
+        no emitir duplicados cuando el tool no cambió nada en el repo.
+        Si git falla (no es repo, no instalado), salimos silenciosamente.
+        """
+        import asyncio as _asyncio
+
+        # Filtra herramientas que mutan el repo.
+        mutating = False
+        try:
+            from claude_agent_sdk import (
+                AssistantMessage,
+                ToolResultBlock,
+                ToolUseBlock,
+                UserMessage,
+            )
+            blocks = []
+            if isinstance(sdk_msg, AssistantMessage):
+                blocks = sdk_msg.content or []
+            elif isinstance(sdk_msg, UserMessage):
+                # UserMessage.content puede ser str | list; solo nos interesa list.
+                content = sdk_msg.content
+                blocks = content if isinstance(content, list) else []
+            else:
+                blocks = []
+            for b in blocks:
+                if isinstance(b, ToolUseBlock):
+                    name = b.name or ""
+                    if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                        mutating = True
+                    elif name == "Bash":
+                        # Heurística barata: si el comando menciona "git"
+                        # (cualquier operación que mueva HEAD/index).
+                        cmd = (b.input or {}).get("command", "") or ""
+                        if "git " in cmd or cmd.startswith("git"):
+                            mutating = True
+                elif isinstance(b, ToolResultBlock):
+                    # Resultado de tool → si el tool mutó, ya sabemos que mutating.
+                    pass
+        except Exception:
+            return
+        if not mutating:
+            return
+
+        proj = session.project
+        path = proj.path
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                "git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD",
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=2)
+            if proc.returncode != 0:
+                return
+            branch = stdout.decode().strip() or "(unknown)"
+
+            proc2 = await _asyncio.create_subprocess_exec(
+                "git", "-C", path, "status", "--porcelain",
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+            )
+            stdout2, _ = await _asyncio.wait_for(proc2.communicate(), timeout=2)
+            dirty = bool(stdout2.decode().strip())
+        except Exception:
+            return
+
+        state_key = f"{branch}|{dirty}"
+        if state_key == self._last_git_state:
+            return
+        self._last_git_state = state_key
+
+        # Emitir por Redis (no BD). El chat OpenHands muestra el cambio en vivo.
+        from panel.core.events.normalize import UIEvent
+        ue = UIEvent(
+            v=1, seq=self._seq, session_id=str(session.id),
+            ts="", kind="git_branch",
+            payload={"branch": branch, "dirty": dirty},
+        )
+        self._redis_publish_ui(ue.to_dict())
 
     def _publish(self, event: Event) -> None:
         import redis as sync_redis

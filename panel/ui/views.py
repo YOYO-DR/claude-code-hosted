@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import redis
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -416,3 +417,64 @@ def tg_webhook(request):
     except tg.TelegramError:
         pass
     return HttpResponse(status=200)
+
+
+# ---------- FASE C: SPA React fallback ----------
+
+SPA_DIST = Path(__file__).resolve().parent.parent / "ui" / "spa" / "dist"
+SPA_INDEX = SPA_DIST / "index.html"
+
+
+def _serve_spa_index():
+    """Devuelve el index.html del SPA si el build existe; si no, None."""
+    if not SPA_INDEX.is_file():
+        return None
+    try:
+        html = SPA_INDEX.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return HttpResponse(html, content_type="text/html")
+
+
+@login_required
+def index_spa_or_legacy(request):
+    """`/` → SPA si está construido; si no, el template legacy de sesiones.
+
+    Si no hay sesión autenticada + TOTP verificada, redirige a /login/
+    (el SPA también lo hace client-side, pero la vista legacy debe
+    mantener el comportamiento del checklist 0).
+    """
+    spa = _serve_spa_index()
+    if spa is not None:
+        return spa
+    # Fallback al listado de sesiones legacy.
+    sessions = Session.objects.select_related("project").order_by("-created_at")[:200]
+    return render(request, "ui/session_list.html", {"sessions": sessions})
+
+
+@login_required
+def spa_catch_all(request, spa_path: str):
+    """Catch-all: cualquier ruta no manejada por Django → SPA index.
+
+    Esto permite que React Router maneje las rutas del front
+    (/sessions/<id>, /projects/<slug>, etc.). Si la URL apunta a un asset
+    que existe en dist/ (e.g. /assets/index-XXX.js), lo servimos tal
+    cual; si no, devolvemos index.html.
+    """
+    # Assets estáticos del build (vite genera /assets/<hash>.<ext>)
+    candidate = SPA_DIST / spa_path
+    if candidate.is_file() and SPA_DIST in candidate.resolve().parents:
+        # Sirve el archivo (vite suele comprimir; whitenoise podría
+        # interceptar antes en producción). Aquí fallback manual.
+        import mimetypes
+
+        ctype, _ = mimetypes.guess_type(str(candidate))
+        return HttpResponse(
+            candidate.read_bytes(),
+            content_type=ctype or "application/octet-stream",
+        )
+    # Cualquier otra cosa → SPA index (React Router resuelve).
+    spa = _serve_spa_index()
+    if spa is not None:
+        return spa
+    raise Http404("SPA no construido y ruta no encontrada")

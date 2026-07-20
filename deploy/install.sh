@@ -75,6 +75,16 @@ if [[ "${1:-}" == "--update" ]]; then
        $PANEL_ENV_ARGS \
        uv sync --project "$REPO_DIR" 2>&1 | tail -3
 
+  echo "==> Build de la SPA (FASE C)"
+  cd "$REPO_DIR/panel/ui/spa"
+  if command -v pnpm >/dev/null 2>&1 && [[ -f package.json ]]; then
+    pnpm install --frozen-lockfile 2>&1 | tail -3 || pnpm install 2>&1 | tail -3
+    pnpm build 2>&1 | tail -5
+  else
+    echo "  pnpm no disponible o sin package.json — salto el build de la SPA."
+    echo "  (la UI legacy en templates sigue sirviéndose mientras tanto)"
+  fi
+
   echo "==> Migraciones + collectstatic"
   cd "$REPO_DIR"
   runuser -u panel -- env HOME=/home/panel \

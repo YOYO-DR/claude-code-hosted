@@ -3,10 +3,11 @@ from django.urls import include, path
 
 from panel.ui import views
 
+# Rutas "legacy" — los templates Django existentes. Se montan primero;
+# FASE C añade el SPA React como fallback al final (cliente-side routing).
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include("panel.api_v1.urls")),
-    path("", views.session_list, name="session_list"),
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
     path("sessions/<uuid:sid>/", views.session_detail, name="session_detail"),
@@ -26,4 +27,9 @@ urlpatterns = [
     ),
     path("tg/webhook", views.tg_webhook, name="tg_webhook"),
     path("github/", views.github_settings, name="github_settings"),
+    # Home: SPA React (FASE C) si dist/ existe, si no fallback al template legacy.
+    path("", views.index_spa_or_legacy, name="session_list"),
+    # Catch-all del SPA: cualquier ruta que no matchee las legacy → index.html
+    # (el router React hace el resto). Sirve los assets estáticos también.
+    path("<path:spa_path>", views.spa_catch_all, name="spa_catch_all"),
 ]
