@@ -4,6 +4,7 @@
 
 import { useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { useAuth } from "@/router";
 import type { CurrentUser } from "@/lib/me";
 
 export function LoginPage() {
@@ -12,6 +13,7 @@ export function LoginPage() {
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { setMe, refresh } = useAuth();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,6 +25,11 @@ export function LoginPage() {
         { method: "POST", body: { username, password, otp_token: otp } },
       );
       if (res.ok && res.user?.is_verified) {
+        // Actualizamos el AuthContext para que el navbar se re-renderice
+        // sin necesidad de un redirect duro.
+        setMe(res.user);
+        // Re-fetch por si TOTP_device aún no se marcó (defensa).
+        await refresh();
         window.location.href = res.next || "/sessions";
       } else if (res.ok) {
         setError("Login ok pero falta código TOTP");

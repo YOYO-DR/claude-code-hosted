@@ -2,7 +2,10 @@
 // Las definimos con createRoute() en lugar de createFileRoute() para
 // evitar depender del plugin de generación de tipos.
 
-import { createRouter, createRoute, createRootRoute, Outlet, redirect } from "@tanstack/react-router";
+import { createContext, useContext, useEffect } from "react";
+import {
+  createRouter, createRoute, createRootRoute, Outlet,
+} from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
 import { LoginPage } from "@/pages/Login";
 import { SessionsPage } from "@/pages/Sessions";
@@ -11,11 +14,26 @@ import { ProjectsPage } from "@/pages/Projects";
 import { McpsPage } from "@/pages/Mcps";
 import { GithubPage } from "@/pages/Github";
 import { PermissionsPage } from "@/pages/Permissions";
-import { fetchMe, type CurrentUser } from "@/lib/me";
+import type { CurrentUser } from "@/lib/me";
 
 export interface RouterContext {
   queryClient: QueryClient;
+}
+
+// ---------- AuthContext: estado React real para que el navbar re-renderice ----------
+
+interface AuthCtx {
   me: CurrentUser | null;
+  setMe: (m: CurrentUser | null) => void;
+  refresh: () => Promise<void>;
+}
+export const AuthContext = createContext<AuthCtx>({
+  me: null,
+  setMe: () => {},
+  refresh: async () => {},
+});
+export function useAuth(): AuthCtx {
+  return useContext(AuthContext);
 }
 
 const rootRoute = createRootRoute({
@@ -23,10 +41,11 @@ const rootRoute = createRootRoute({
 });
 
 function RootLayout() {
-  // Si NO hay sesión, mostramos un header mínimo (solo el título).
-  // Si la hay, mostramos los enlaces a las secciones.
-  // `me` viene del contexto del router (actualizado en boot()).
-  const me = (router.options.context as { me?: import("@/lib/me").CurrentUser | null } | undefined)?.me ?? null;
+  const { me, refresh } = useAuth();
+  // Re-fetch al montar por si el boot inicial perdió la cookie (raro pero posible).
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
   const authed = !!me?.is_verified;
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -73,18 +92,21 @@ function RootLayout() {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: async () => {
-    // Si hay sesión, redirige a /sessions; si no, muestra Login.
-    try {
-      const me = await fetchMe();
-      if (me?.is_verified) throw redirect({ to: "/sessions" });
-    } catch (e) {
-      if ((e as { isRedirect?: boolean })?.isRedirect) throw e;
-      // 401 o red caída: muestra login.
-    }
-  },
-  component: LoginPage,
+  component: IndexRedirect,
 });
+
+function IndexRedirect() {
+  // Si hay sesión, redirige a /sessions; si no, muestra Login.
+  // Usa useAuth (estado React) en vez de fetchMe directo para evitar
+  // un round-trip extra.
+  const { me } = useAuth();
+  if (me?.is_verified) {
+    // Renderizamos un redirect client-side (window.location.href).
+    window.location.href = "/sessions";
+    return null;
+  }
+  return <LoginPage />;
+}
 
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
