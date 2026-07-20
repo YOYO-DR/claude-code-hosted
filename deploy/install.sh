@@ -75,26 +75,16 @@ if [[ "${1:-}" == "--update" ]]; then
        $PANEL_ENV_ARGS \
        uv sync --project "$REPO_DIR" 2>&1 | tail -3
 
-  echo "==> Build de la SPA (FASE C)"
-  cd "$REPO_DIR/panel/ui/spa"
-  if [[ -f package.json ]]; then
-    # Preferimos pnpm (rápido, lockfile estricto); fallback a npm si no está.
-    if command -v pnpm >/dev/null 2>&1; then
-      PKG=pnpm
-      pnpm install --frozen-lockfile 2>&1 | tail -3 \
-        || pnpm install 2>&1 | tail -3
-      pnpm build 2>&1 | tail -5
-    elif command -v npm >/dev/null 2>&1; then
-      PKG=npm
-      npm ci 2>&1 | tail -3 || npm install 2>&1 | tail -3
-      # pnpm ejecuta `tsc --noEmit && vite build` vía `npm run build`.
-      npm run build 2>&1 | tail -8
-    else
-      echo "  ni pnpm ni npm disponibles — salto el build de la SPA."
-      echo "  (la UI legacy en templates sigue sirviéndose mientras tanto)"
-      PKG=""
-    fi
-    echo "  SPA build (${PKG:-skip}): $(ls -1 dist/ 2>/dev/null | wc -l) archivos en dist/"
+  echo "==> Verificando build de la SPA (FASE C)"
+  # El build se commitea directamente en panel/ui/spa/dist/ (regenerable con
+  # `pnpm build` en local). El VPS no necesita node — simplemente servimos
+  # el dist/ que viene en el repo. Esto evita instalar npm/pnpm en el VPS
+  # y mantiene el deploy ligero.
+  if [[ -f "$REPO_DIR/panel/ui/spa/dist/index.html" ]]; then
+    echo "  SPA dist/index.html presente: $(ls -1 "$REPO_DIR/panel/ui/spa/dist/" | wc -l) archivos en dist/"
+  else
+    echo "  AVISO: panel/ui/spa/dist/index.html NO existe. La UI legacy en"
+    echo "  templates seguirá sirviéndose. Para regenerar: cd panel/ui/spa && pnpm build"
   fi
 
   echo "==> Migraciones + collectstatic"
