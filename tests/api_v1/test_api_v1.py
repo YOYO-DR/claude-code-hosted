@@ -38,7 +38,7 @@ def _force_otp_verified():
     directamente."""
     import panel.api_v1.auth as auth_mod
     original = auth_mod._is_verified
-    auth_mod._is_verified = lambda user: True
+    auth_mod._is_verified = lambda request: True
     yield
     auth_mod._is_verified = original
 
@@ -118,8 +118,8 @@ def test_login_success_without_otp_returns_ok_with_user(monkeypatch):
 
     # Restaurar la lógica real: callable que retorna False si no hay device.
     User = get_user_model()
-    def real_is_verified(user):
-        val = getattr(user, "is_verified", None)
+    def real_is_verified(request):
+        val = getattr(request.user, "is_verified", None)
         if val is None:
             return False
         if callable(val):

@@ -12,26 +12,42 @@ from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 
-def _is_verified(user) -> bool:
-    """Lee `is_verified` del user. django_otp lo inyecta como método cuando
-    el OTPMiddleware corre; en tests sin middleware puede venir como
-    atributo plano (`is_verified` set a True por monkeypatch)."""
+def _is_verified(request) -> bool:
+    """Lee `is_verified` del usuario de la request.
+
+    django_otp.is_verified() evalúa contra la sesión actual. Cuando
+    `otp_login()` se acaba de llamar dentro del MISMO request, el atributo
+    del modelo User (que es plano) sigue False — el OTPMiddleware aún no
+    ha tenido oportunidad de reasignar el user. Pero la sesión YA tiene
+    `_otp_device_id` seteada. La forma robusta: leer de la sesión.
+    """
+    # 1) Sesión tiene el device verificado (caso normal tras otp_login).
+    if request.session.get("_otp_device_id"):
+        return True
+    # 2) Fallback: invocar user.is_verified() por si el middleware ya marcó.
+    user = getattr(request, "user", None)
+    if user is None:
+        return False
     val = getattr(user, "is_verified", None)
     if val is None:
         return False
     if callable(val):
         try:
             return bool(val())
-        except TypeError:
+        except (TypeError, Exception):  # noqa: BLE001
             return False
     return bool(val)
 
 
-def _user_payload(user) -> dict:
+def _user_payload(request) -> dict:
+    """Devuelve el payload JSON del usuario actual. Usa request (no user)
+    porque necesitamos leer de la sesión para detectar verificación
+    post-otp_login en el mismo request (ver _is_verified)."""
+    user = request.user
     return {
         "id": user.id,
         "username": user.username,
-        "is_verified": _is_verified(user),
+        "is_verified": _is_verified(request),
     }
 
 
@@ -52,7 +68,7 @@ def require_verified_json(view_func):
     def wrapper(request, *args, **kwargs):
         if not request.user.is_authenticated:
             return JsonResponse({"detail": "unauthenticated"}, status=401)
-        if not _is_verified(request.user):
+        if not _is_verified(request):
             return JsonResponse({"detail": "TOTP no verificado"}, status=403)
         return view_func(request, *args, **kwargs)
 
@@ -65,7 +81,7 @@ def require_verified_json(view_func):
 def me(request: HttpRequest) -> JsonResponse:
     """Devuelve el usuario actual o 401 si no hay sesión válida.
     Importante: poner la cookie csrftoken para que el SPA pueda hacer POST."""
-    return JsonResponse(_user_payload(request.user))
+    return JsonResponse(_user_payload(request))
 
 
 @csrf_exempt
@@ -111,7 +127,7 @@ def login_view(request: HttpRequest) -> JsonResponse:
     # a False (django_otp solo inyecta is_verified() tras verificar el device
     # contra la sesión actual; el atributo del modelo User nunca cambia).
     return JsonResponse(
-        {"ok": True, "user": _user_payload(request.user), "next": next_url}
+        {"ok": True, "user": _user_payload(request), "next": next_url}
     )
 
 
