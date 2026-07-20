@@ -240,3 +240,89 @@ Implementación:
 - **Sin `git worktree`** por ahora (§5.2): el worker es cola serial y hay una
   clonación por proyecto. Se reevaluará si aparecen sesiones concurrentes sobre
   el mismo repo.
+
+---
+
+## D11 — Bug de aprobaciones "reaparece tras refrescar" (Fase A, MIGRATION1 §2)
+
+### Síntoma (en vivo, 2026-07-20)
+
+> "Le doy Permitir o Denegar y al rato vuelve a aparecer, y además esa
+> sesión ya está cerrada."
+
+### Evidencia reproducible en VPS (sesión `561e1cbb-a1a8-4e30-8758-bae3a9f0db24`,
+proyecto `plantilla-django-react`)
+
+**Dump inicial** (`PermissionRequest` ordenado por `created_at` desc):
+- `94f930a5-…` → `status=pending`, `resolved_by=None`, `exp=17:24:12`,
+  `sess_status=stopped`, `expired_now=True`. **Fantasma: lleva horas
+  pendiente de una sesión muerta.**
+- 14 de las 15 más recientes: todas de sesiones ya `stopped`. La transición
+  a `expired` la hace `perm_svc.expire_pending()` solo **al arrancar** el
+  worker de la sesión, no al pararla/crash.
+
+**Flujo aprobación actual (`permission_resolve`, vista web)**: hace solo
+`SET perm:<uuid>:answer allow|web NX EX 900`. **No toca DB**. El worker es
+el único que llama `perm_svc.apply_answer()` al leer la clave — pero si la
+sesión está `idle`/`stopped`/`crashed`, **nadie** la lee.
+
+**Confirmación experimental**: creé `REQ_ID=20e0cb4b-…` con
+`create_request()` sobre sesión `idle` y luego ejecuté el mismo `SET NX`
+que hace la vista. Resultado DB tras el SET:
+- `status=pending`, `resolved_by=None` (sin cambios).
+- En Redis: `perm:20e0cb4b-…:answer = "allow|web"`.
+
+### Causa raíz
+
+Dos defectos encadenados:
+
+1. **La vista `permission_resolve` no escribe DB.** Solo `SET NX`. La
+   actualización a `allowed`/`denied`/`expired` la hace el worker con
+   `apply_answer()` desde `_wait_answer()`. Si el worker está esperando
+   (`idle`), o si ya murió (`stopped`/`crashed`), esa transición **nunca
+   ocurre**.
+2. **`expire_pending()` solo se llama al arrancar el worker**
+   (`workers/session_worker.py`). `stop_session()` cambia `Session.status`
+   pero no cancela las requests pendientes de esa sesión. Resultado: la
+   cola web (`/permisos/`) y el badge (`pending_permissions` en
+   `context.py`) siguen mostrando fantasmas.
+
+### Filtro de cola también defectuoso
+
+- `panel/ui/views.py:223` — cola:
+  `PermissionRequest.objects.filter(status=PENDING)`. **No** filtra
+  `expires_at > now()` ni `session.status ∈ {running, waiting_approval,
+  idle}`.
+- `panel/ui/context.py:13` — badge navbar: misma query cruda, dos
+  fuentes sin alinear.
+
+### Hipótesis del §2.1 de MIGRATION1.MD — veredictos
+
+| # | Hipótesis | Veredicto |
+|---|-----------|-----------|
+| 1 | Resolución no persiste en DB al aprobar | **CONFIRMADA** — vista solo hace SET NX |
+| 2 | Cola lista `pending` sin filtrar por sesión viva | **CONFIRMADA** — views.py:223 + context.py:13 |
+| 3 | `expires_at` no se respeta en lectura | **CONFIRMADA** — query no incluye filtro de fecha |
+| 4 | Doble fuente (DB vs otro query) | **CONFIRMADA** — context.py y views.py divergen; ambas sin filtro |
+
+### Decisión de fix (Fase A, MIGRATION1 §2.2)
+
+- **Una transacción por resolución** (web/telegram/timeout):
+  `UPDATE PermissionRequest SET status=?,resolved_by=?,resolved_at=now()
+  WHERE id=? AND status='pending'`. Solo si afecta 1 fila se publica al
+  worker. Si afecta 0 → conflicto idempotente (otro origen ya respondió).
+- **`stop_session`/`crash` cancela en cascada**: en la misma transacción
+  que cambia `Session.status`, marcar todas sus `PermissionRequest`
+  pendientes como `expired` (status existente) — sin introducir
+  `cancelled` nuevo.
+- **Una sola query de cola**: `status='pending' AND expires_at > now()
+  AND session.status IN ('running','waiting_approval','idle')`, usada
+  por vista y badge (helper compartido).
+- **Push WS `permission_resolved`/`permission_cancelled`** (reusa el
+  canal `perm:resolved` que ya consume `tg_bridge`).
+
+### Compatibilidad
+
+- `apply_answer` y `expire_pending` ya son idempotentes — no se
+  reescriben, solo se invoca el patrón desde la vista también.
+- El worker sigue leyendo la clave Redis (cambio invisible para él).

@@ -13,7 +13,7 @@ from django.views.decorators.http import require_POST
 from django_otp import login as otp_login
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
-from panel.core.models import Config, McpServer, PermissionRequest, Project, Session
+from panel.core.models import Config, McpServer, Project, Session
 from panel.core.services import github as gh
 from panel.core.services import permissions as perm_svc
 from panel.core.services import privileged
@@ -220,8 +220,10 @@ def mcp_toggle(request, mcp_id):
 def permission_queue(request):
     if not request.user.is_verified():
         return redirect("login")
+    # D11: query única filtrada por sesión viva + expires_at — vista y badge
+    # usan `perm_svc.live_pending_qs()` para no divergir.
     pending = (
-        PermissionRequest.objects.filter(status=PermissionRequest.Status.PENDING)
+        perm_svc.live_pending_qs()
         .select_related("session__project")
         .order_by("expires_at")
     )
@@ -231,21 +233,42 @@ def permission_queue(request):
 @login_required
 @require_POST
 def permission_resolve(request, request_id):
-    """Reclama la respuesta vía SET NX (§4.1). El primero gana; si otro origen ya
-    respondió, devuelve conflicto. El worker (único escritor) transiciona la fila."""
+    """Resuelve la PermissionRequest de forma transaccional (D11 / MIGRATION1 §2.2):
+
+    1. `resolve_atomically` hace el UPDATE … WHERE id=? AND status='pending'
+       dentro de transaction.atomic con SELECT FOR UPDATE SKIP LOCKED — gana
+       el primero, el resto recibe `conflict=true`.
+    2. Solo si ganó (claimed=True) publica la respuesta en Redis (`SET NX`)
+       para que el worker despierte y siga el flujo del SDK.
+    3. Si la sesión ya no está viva, la request queda `expired` (cleanup) y
+       el caller recibe `conflict=true` (sin SET NX, sin ejecutar tool).
+    """
     if not request.user.is_verified():
         return JsonResponse({"error": "unauthorized"}, status=403)
     answer = request.POST.get("answer")
     if answer not in {"allow", "deny", "allow_always"}:
         return JsonResponse({"error": "invalid answer"}, status=400)
+    try:
+        claimed, req = perm_svc.resolve_atomically(
+            str(request_id), answer, source="web"
+        )
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    if not claimed:
+        return JsonResponse({"ok": False, "conflict": True})
+    # Solo si ganamos en DB notificamos al worker (idempotente para el worker).
     client = redis.from_url(settings.REDIS_URL)
     try:
-        claimed = perm_svc.claim_answer_sync(client, str(request_id), answer)
+        ok = perm_svc.claim_answer_sync(client, str(request_id), answer, source="web")
     except redis.RedisError:
-        return JsonResponse({"error": "bus unavailable"}, status=503)
+        # La fila ya está marcada; el worker la verá expirada cuando despierte.
+        return JsonResponse({"ok": True, "warn": "bus unavailable, fila persistida"})
     finally:
         client.close()
-    return JsonResponse({"ok": claimed, "conflict": not claimed})
+    # allow_always: persistir reglas (best-effort, no afecta respuesta).
+    if answer == "allow_always" and req is not None:
+        perm_svc._persist_always_rules(req, [req.tool])  # noqa: SLF001
+    return JsonResponse({"ok": ok, "conflict": not ok})
 
 
 @login_required

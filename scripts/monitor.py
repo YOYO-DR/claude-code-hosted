@@ -82,9 +82,21 @@ def check_heartbeats(r: redis.Redis) -> None:
         except redis.RedisError:
             return  # bus caído: no es asunto de este chequeo
         if hb is None:
-            s.status = Session.Status.CRASHED
-            s.ended_at = s.ended_at or timezone.now()
-            s.save(update_fields=["status", "ended_at", "updated_at"])
+            # D11: marcar crashed Y cancelar en cascada sus PermissionRequest
+            # pendientes en la misma transacción (no dejar approvals fantasmas).
+            from django.db import transaction
+
+            from panel.core.services import permissions as perm_svc
+
+            with transaction.atomic():
+                s2 = Session.objects.select_for_update().get(pk=s.pk)
+                s2.status = Session.Status.CRASHED
+                s2.ended_at = s2.ended_at or timezone.now()
+                s2.save(update_fields=["status", "ended_at", "updated_at"])
+                perm_svc.cancel_pending_for_session(
+                    s2,
+                    resolved_by=perm_svc.PermissionRequest.ResolvedBy.TIMEOUT,
+                )
             if _should_alert(f"hb:{s.id}"):
                 _alert(f"Sesión {s.id} sin heartbeat → marcada crashed.")
 

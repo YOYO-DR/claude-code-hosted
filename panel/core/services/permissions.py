@@ -125,6 +125,107 @@ def expire_pending(session: Session) -> int:
     )
 
 
+def cancel_pending_for_session(
+    session: Session, *, resolved_by: str = PermissionRequest.ResolvedBy.TIMEOUT
+) -> int:
+    """Cancela en cascada todas las requests pendientes de una sesión que pasa
+    a estado terminal (stopped/crashed). Mismo path que expire_pending pero
+    parametrizable (útil cuando el caller ya tiene un resolved_by específico).
+    Devuelve el nº de filas afectadas."""
+    return PermissionRequest.objects.filter(
+        session=session, status=PermissionRequest.Status.PENDING
+    ).update(
+        status=PermissionRequest.Status.EXPIRED,
+        resolved_by=resolved_by,
+    )
+
+
+# Estados de sesión en los que una request pendiente sigue siendo aprobable.
+# Una sesión muerta (stopped/crashed) o terminando (starting) no debe tener
+# approvals visibles. Usado por la query única de cola (D11).
+LIVE_SESSION_STATUSES = (
+    Session.Status.RUNNING,
+    Session.Status.WAITING_APPROVAL,
+    Session.Status.IDLE,
+)
+
+
+def live_pending_qs():
+    """QuerySet único de PermissionRequest que la UI debe mostrar (D11). Filtra:
+    - status='pending' (no resueltas)
+    - expires_at > now() (no vencidas en el reloj)
+    - session.status ∈ {running, waiting_approval, idle} (sesión viva)
+
+    Usado por `permission_queue` (vista) y `pending_permissions` (badge navbar)
+    para que no diverjan (no más "doble fuente").
+    """
+    now = timezone.now()
+    return PermissionRequest.objects.filter(
+        status=PermissionRequest.Status.PENDING,
+        expires_at__gt=now,
+        session__status__in=LIVE_SESSION_STATUSES,
+    )
+
+
+def resolve_atomically(
+    request_id: str, answer: str, *, source: str = "web"
+) -> tuple[bool, PermissionRequest | None]:
+    """Resuelve una PermissionRequest transaccionalmente y de forma idempotente
+    (D11 / MIGRATION1 §2.2). Devuelve (claimed, req):
+
+    - `claimed=True` cuando el UPDATE afectó exactamente 1 fila: este caller
+      gana; el worker será notificado por el caller vía `SET NX` en Redis.
+    - `claimed=False` cuando afectó 0 filas: otro origen ya respondió (o el
+      request no existe), o la sesión ya no está viva — no se hace nada.
+
+    Acepta `allow`, `deny`, `allow_always`, `timeout`. `source` solo aplica a
+    allow/deny/allow_always (timeout siempre lleva `resolved_by=TIMEOUT`).
+
+    Se ejecuta dentro de `transaction.atomic` con `select_for_update(skip_locked)`
+    para que dos resoluciones concurrentes no se pisen: la segunda ve la fila
+    ya cambiada y devuelve `claimed=False`.
+    """
+    from django.db import transaction
+
+    status_map = {
+        "allow": PermissionRequest.Status.ALLOWED,
+        "allow_always": PermissionRequest.Status.ALLOWED_ALWAYS,
+        "deny": PermissionRequest.Status.DENIED,
+        "timeout": PermissionRequest.Status.EXPIRED,
+    }
+    if answer not in status_map:
+        raise ValueError(f"respuesta inválida: {answer}")
+    new_status = status_map[answer]
+    if answer == "timeout":
+        resolved_by = PermissionRequest.ResolvedBy.TIMEOUT
+    elif source == "telegram":
+        resolved_by = PermissionRequest.ResolvedBy.TELEGRAM
+    else:
+        resolved_by = PermissionRequest.ResolvedBy.WEB
+
+    with transaction.atomic():
+        try:
+            req = (
+                PermissionRequest.objects.select_for_update(skip_locked=True)
+                .get(id=request_id, status=PermissionRequest.Status.PENDING)
+            )
+        except PermissionRequest.DoesNotExist:
+            return False, None
+        # Defensa en profundidad: si la sesión ya no está viva, no dejamos
+        # aprobar fantasmas aunque la fila siga pending en DB.
+        if req.session.status not in LIVE_SESSION_STATUSES:
+            # Marcamos expired aquí mismo y devolvemos claimed=False (el caller
+            # verá que no ganó). Esto cierra el caso "sesión murió con pending".
+            req.status = PermissionRequest.Status.EXPIRED
+            req.resolved_by = PermissionRequest.ResolvedBy.TIMEOUT
+            req.save(update_fields=["status", "resolved_by", "updated_at"])
+            return False, req
+        req.status = new_status
+        req.resolved_by = resolved_by
+        req.save(update_fields=["status", "resolved_by", "updated_at"])
+        return True, req
+
+
 def claim_answer_sync(redis_client, request_id: str, answer: str, source: str = "web") -> bool:
     """Escribe la respuesta con SET NX, codificando el origen como `answer|source`.
     True si este llamador la reclamó; False si otro ya respondió (conflicto)."""

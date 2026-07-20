@@ -22,6 +22,11 @@ from panel.core.models import (
 from panel.core.services import permissions as perm_svc
 from panel.core.services import rewrite
 
+
+def timezone_now():
+    from django.utils import timezone
+    return timezone.now()
+
 # transaction=True: los tests async crean filas vía sync_to_async (otra conexión
 # que commitea, fuera del rollback normal); truncar entre tests evita fugas.
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -30,7 +35,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 _counter = 0
 
 
-def _session(mode=PermissionPolicy.Mode.APPROVE, timeout=None):
+def _session(mode=PermissionPolicy.Mode.APPROVE, timeout=None, status=Session.Status.IDLE):
     global _counter
     _counter += 1
     n = _counter
@@ -43,7 +48,9 @@ def _session(mode=PermissionPolicy.Mode.APPROVE, timeout=None):
         model_profile=profile, permission_policy=policy,
         permission_timeout_seconds=timeout,
     )
-    return Session.objects.create(project=project)
+    # Default IDLE para que las requests creadas sean inmediatamente "live"
+    # y sobrevivan al filtro de `live_pending_qs` / `resolve_atomically`.
+    return Session.objects.create(project=project, status=status)
 
 
 def _aredis():
@@ -261,3 +268,128 @@ def test_claim_rejects_invalid_answer():
     client = fakeredis.FakeStrictRedis(server=fakeredis.FakeServer())
     with pytest.raises(ValueError):
         perm_svc.claim_answer_sync(client, "x", "maybe")
+
+
+# ---------- D11 / FASE A: fix de aprobaciones "reaparece tras refrescar" ----------
+
+def test_resolve_atomically_claims_pending():
+    """El UPDATE condicional afecta 1 fila → claimed=True."""
+    session = _session()
+    req = perm_svc.create_request(session, "Bash", {"command": "ls"}, 900)
+    claimed, db_req = perm_svc.resolve_atomically(str(req.id), "allow", source="web")
+    assert claimed is True
+    assert db_req is not None
+    assert db_req.status == PermissionRequest.Status.ALLOWED
+    assert db_req.resolved_by == PermissionRequest.ResolvedBy.WEB
+
+
+def test_resolve_atomically_second_call_loses():
+    """El segundo caller encuentra la fila ya resuelta → claimed=False,
+    sin importar el origen. Idempotencia entre web/telegram/timeout."""
+    session = _session()
+    req = perm_svc.create_request(session, "Bash", {"command": "ls"}, 900)
+    c1, _ = perm_svc.resolve_atomically(str(req.id), "allow", source="web")
+    c2, _ = perm_svc.resolve_atomically(str(req.id), "deny", source="telegram")
+    assert c1 is True
+    assert c2 is False
+    # El primer ganador manda — el estado es el suyo.
+    req.refresh_from_db()
+    assert req.status == PermissionRequest.Status.ALLOWED
+    assert req.resolved_by == PermissionRequest.ResolvedBy.WEB
+
+
+def test_resolve_atomically_unknown_id_returns_false():
+    """UUID inexistente → claimed=False, req=None."""
+    claimed, req = perm_svc.resolve_atomically("00000000-0000-0000-0000-000000000000", "allow")
+    assert claimed is False
+    assert req is None
+
+
+def test_resolve_atomically_expires_phantom_from_dead_session():
+    """Si la sesión ya está muerta (stopped/crashed), la fila se marca expired
+    y el caller recibe claimed=False (no aprueba fantasmas)."""
+    session = _session()
+    session.status = Session.Status.STOPPED
+    session.save(update_fields=["status", "updated_at"])
+    req = perm_svc.create_request(session, "Bash", {"command": "ls"}, 900)
+    claimed, db_req = perm_svc.resolve_atomically(str(req.id), "allow", source="web")
+    assert claimed is False
+    req.refresh_from_db()
+    assert req.status == PermissionRequest.Status.EXPIRED
+    assert req.resolved_by == PermissionRequest.ResolvedBy.TIMEOUT
+
+
+def test_cancel_pending_for_session_only_pending_rows():
+    """Cascada stop→cancel: solo afecta status='pending'; las resueltas quedan
+    intactas (verificable con una mezcla)."""
+    session = _session()
+    r1 = perm_svc.create_request(session, "Bash", {"command": "a"}, 900)
+    r2 = perm_svc.create_request(session, "Bash", {"command": "b"}, 900)
+    perm_svc.resolve_atomically(str(r1.id), "allow", source="web")  # ya resuelta
+    n = perm_svc.cancel_pending_for_session(session)
+    assert n == 1  # solo r2
+    r1.refresh_from_db()
+    r2.refresh_from_db()
+    assert r1.status == PermissionRequest.Status.ALLOWED  # intacta
+    assert r2.status == PermissionRequest.Status.EXPIRED
+
+
+def test_live_pending_qs_excludes_dead_and_expired():
+    """La query única de la UI: solo pending + no expirada + sesión viva."""
+    live = _session()
+    dead = _session()
+    dead.status = Session.Status.STOPPED
+    dead.save(update_fields=["status", "updated_at"])
+
+    r_live = perm_svc.create_request(live, "Bash", {"command": "x"}, 900)
+    r_dead = perm_svc.create_request(dead, "Bash", {"command": "x"}, 900)
+    # Creamos una expirada directamente (manipulando expires_at).
+    r_expired = perm_svc.create_request(live, "Bash", {"command": "x"}, 900)
+    from django.utils import timezone
+    r_expired.expires_at = timezone_now() - timezone.timedelta(seconds=1)
+    r_expired.save(update_fields=["expires_at"])
+
+    ids = set(str(r.id) for r in perm_svc.live_pending_qs())
+    assert str(r_live.id) in ids
+    assert str(r_dead.id) not in ids
+    assert str(r_expired.id) not in ids
+
+
+def test_live_pending_qs_excludes_starting_state():
+    """Una sesión 'starting' (todavía no arrancada) tampoco debe tener
+    aprobaciones visibles — solo estados vivos (running/waiting_approval/idle)."""
+    session = _session()
+    session.status = Session.Status.STARTING
+    session.save(update_fields=["status", "updated_at"])
+    req = perm_svc.create_request(session, "Bash", {"command": "x"}, 900)
+    ids = set(str(r.id) for r in perm_svc.live_pending_qs())
+    assert str(req.id) not in ids
+
+
+def test_stop_session_cancels_pending_in_same_transaction(monkeypatch):
+    """stop_session marca la sesión STOPPED y cancela sus PermissionRequest
+    pendientes en la misma transacción (D11 / MIGRATION1 §2.2). Mockeamos
+    supervisor.stop y redis (el test no depende del bus real)."""
+    from panel.core.services import sessions as sess_svc
+
+    # Silenciar supervisor (subprocess systemctl) y la conexión a Redis real.
+    monkeypatch.setattr("panel.core.services.sessions.supervisor.stop", lambda sid: None)
+    fake_redis = fakeredis.FakeStrictRedis()
+    monkeypatch.setattr(
+        "panel.core.services.sessions._redis", lambda: fake_redis
+    )
+
+    session = _session()
+    # Subimos a 'running' (requisito para que stop_session actúe sobre estado
+    # vivo — la cascada es para pasar de vivo a terminal).
+    session.status = Session.Status.RUNNING
+    session.save(update_fields=["status", "updated_at"])
+    req = perm_svc.create_request(session, "Bash", {"command": "x"}, 900)
+
+    sess_svc.stop_session(session)
+
+    session.refresh_from_db()
+    req.refresh_from_db()
+    assert session.status == Session.Status.STOPPED
+    assert req.status == PermissionRequest.Status.EXPIRED
+    assert req.resolved_by == PermissionRequest.ResolvedBy.TIMEOUT
