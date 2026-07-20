@@ -17,7 +17,7 @@ django_asgi_app = get_asgi_application()
 
 from channels.auth import AuthMiddlewareStack  # noqa: E402
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
-from channels.security.websocket import ALLOWED_HOSTS  # noqa: E402
+from django.conf import settings  # noqa: E402
 
 from panel.core.routing import websocket_urlpatterns  # noqa: E402
 
@@ -45,12 +45,10 @@ class _HostHeaderValidator:
                     host = value.decode("latin-1")
                     break
             # Aceptar el host directo o con puerto.
-            allowed_hosts = ALLOWED_HOSTS
             host_ok = False
             if host:
-                # Quitar puerto.
                 bare = host.split(":", 1)[0]
-                for allowed in allowed_hosts:
+                for allowed in settings.ALLOWED_HOSTS:
                     if allowed == "*" or bare == allowed:
                         host_ok = True
                         break
