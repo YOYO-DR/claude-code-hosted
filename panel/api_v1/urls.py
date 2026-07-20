@@ -21,6 +21,8 @@ urlpatterns = [
     path("projects/<slug:slug>/tree/", projects.project_tree, name="api_v1_project_tree"),
     path("projects/<slug:slug>/file/", projects.project_file, name="api_v1_project_file"),
     path("projects/<slug:slug>/diff/", projects.project_diff, name="api_v1_project_diff"),
+    path("projects/<slug:slug>/diff/files/", projects.project_diff_files, name="api_v1_project_diff_files"),
+    path("projects/<slug:slug>/diff/file/", projects.project_diff_file, name="api_v1_project_diff_file"),
     path("projects/<slug:slug>/git/", projects.project_git, name="api_v1_project_git"),
     path("projects/<slug:slug>/model/", models.set_project_model, name="api_v1_set_project_model"),
     # MCPs

@@ -88,8 +88,12 @@ header.app-header .right form { display: inline; }
 
 main {
   padding: 1.25rem;
-  max-width: 1100px;
+  max-width: 1600px;
   margin: 0 auto;
+  width: 100%;
+}
+@media (max-width: 800px) {
+  main { padding: 0.75rem; }
 }
 h1 { margin: 0 0 1rem; font-size: 1.5rem; }
 h2 { margin: 1rem 0 0.5rem; font-size: 1.15rem; }
@@ -171,9 +175,12 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 
 .session-layout {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 1fr);
   gap: 1rem;
   align-items: start;
+}
+@media (max-width: 900px) {
+  .session-layout { grid-template-columns: 1fr; }
 }
 .chat {
   border: 1px solid var(--border);
@@ -210,6 +217,8 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
   border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 .bubble code, .bubble pre {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -217,12 +226,14 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 }
 .bubble pre {
   margin: 0.3rem 0 0;
-  max-height: 240px;
-  overflow: auto;
+  max-height: 320px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 0.4rem;
+  padding: 0.5rem 0.65rem;
   white-space: pre;
 }
 .bubble.agent-text { border-left-color: var(--accent); }
@@ -271,7 +282,86 @@ pre.unboxed {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-width: 100%;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.85em;
+  white-space: pre;
+  tab-size: 2;
 }
+
+/* ---------- Cambios tab (diff tree con +/- colors) ---------- */
+
+.diff-header {
+  display: flex;
+  align-items: center;
+  font-size: 0.85em;
+  color: var(--muted);
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+ul.diff-tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+li.diff-item { padding: 0; overflow: hidden; }
+.diff-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.diff-row:hover:not(:disabled) { background: var(--bg); border-color: var(--accent); }
+.diff-row:disabled { cursor: default; opacity: 0.7; }
+.diff-row .diff-chevron { color: var(--muted); font-size: 0.85em; width: 1em; }
+.diff-row .diff-filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.diff-row .diff-filename code { font-family: ui-monospace, monospace; font-size: 0.85em; }
+.diff-row .diff-counts { font-family: ui-monospace, monospace; font-size: 0.85em; white-space: nowrap; }
+.diff-body {
+  margin: 0.2rem 0 0.4rem 1.2rem;
+  padding: 0.5rem;
+  border-left: 3px solid var(--accent);
+  font-size: 0.85em;
+  max-height: 380px;
+  overflow: auto;
+}
+.diff-hunk {
+  background: #ddf4ff;
+  color: #0550ae;
+  padding: 0.1rem 0.4rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.95em;
+  margin: 0.2rem 0;
+  border-radius: 3px;
+}
+.diff-line {
+  display: flex;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre;
+}
+.diff-line.add { background: #e6ffec; color: #1a7f37; }
+.diff-line.del { background: #ffebe9; color: #cf222e; }
+.diff-gutter {
+  display: inline-block;
+  width: 1.2em;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+  flex-shrink: 0;
+}
+.diff-text { flex: 1; }

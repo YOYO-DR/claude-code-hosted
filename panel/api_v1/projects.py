@@ -211,6 +211,98 @@ def project_diff(request: HttpRequest, slug: str) -> JsonResponse:
 
 @require_GET
 @require_verified_json
+def project_diff_files(request: HttpRequest, slug: str) -> JsonResponse:
+    """GET /api/v1/projects/<slug>/diff/files/
+    Lista de archivos modificados (unstaged+staged) con +/- counts.
+    Lo consume el SPA (ProjectDiff rediseñado): muestra un árbol de
+    archivos modificados y permite expandir para ver el diff.
+    Formato por archivo: {path, status, additions, deletions, is_binary}
+    status ∈ {M=modified, A=added, D=deleted, R=renamed, ??=untracked}
+    """
+    p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    if not Path(p.path).is_dir():
+        return JsonResponse({"files": [], "not_a_repo": True})
+    # --name-status da una línea por archivo "M\tpath" o "R\told\tnew"
+    # Lo combinamos con --numstat que da "adds\tdels\tpath".
+    ns = subprocess.run(
+        ["git", "-C", p.path, "diff", "--name-status", "--no-renames"],
+        capture_output=True, text=True, timeout=10,
+    )
+    nm = subprocess.run(
+        ["git", "-C", p.path, "diff", "--numstat", "--no-renames"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if ns.returncode != 0 and "not a git repository" in (ns.stderr or ""):
+        return JsonResponse({"files": [], "not_a_repo": True})
+    if ns.returncode != 0:
+        return JsonResponse({
+            "files": [],
+            "error": (ns.stderr or "").strip() or f"git rc={ns.returncode}",
+        })
+    # Parse numstat: "+\t-\tpath" (o "-\t-\tpath" para binarios)
+    num: dict[str, tuple[int, int]] = {}
+    for ln in (nm.stdout or "").splitlines():
+        parts = ln.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d, path = parts[0], parts[1], parts[2]
+        try:
+            adds = int(a)
+            dels = int(d)
+        except ValueError:
+            adds, dels = -1, -1  # binario
+        num[path] = (adds, dels)
+    files = []
+    for ln in (ns.stdout or "").splitlines():
+        parts = ln.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0]
+        path = parts[-1]
+        adds, dels = num.get(path, (-1, -1))
+        is_binary = adds < 0 or dels < 0
+        files.append({
+            "path": path,
+            "status": status,
+            "additions": max(adds, 0),
+            "deletions": max(dels, 0),
+            "is_binary": is_binary,
+        })
+    return JsonResponse({"files": files})
+
+
+@require_GET
+@require_verified_json
+def project_diff_file(request: HttpRequest, slug: str) -> JsonResponse:
+    """GET /api/v1/projects/<slug>/diff/file/?path=<rel>
+    Diff de un solo archivo — el SPA lo usa para lazy-load cuando el
+    usuario expande un archivo en ProjectDiff rediseñado."""
+    rel = request.GET.get("path", "")
+    if not rel:
+        return JsonResponse({"error": "Falta ?path="}, status=400)
+    p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    try:
+        _ = _safe_resolve(p, rel)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
+    cmd = ["git", "-C", p.path, "diff", "--no-color", "--", rel]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    not_a_repo = (
+        proc.returncode != 0
+        and ("not a git repository" in (proc.stderr or "")
+             or "cannot change to" in (proc.stderr or ""))
+    )
+    if not_a_repo:
+        return JsonResponse({"path": rel, "diff": "", "not_a_repo": True})
+    if proc.returncode != 0:
+        return JsonResponse({
+            "error": (proc.stderr or "").strip() or f"git rc={proc.returncode}",
+        }, status=500)
+    return JsonResponse({"path": rel, "diff": proc.stdout})
+
+
+@require_GET
+@require_verified_json
 def project_git(request: HttpRequest, slug: str) -> JsonResponse:
     """GET /api/v1/projects/<slug>/git/
     Devuelve la rama actual + flag dirty del repo. Endpoint consumido por

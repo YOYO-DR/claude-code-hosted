@@ -24,13 +24,6 @@ interface File {
   content: string | null;
 }
 
-interface Diff {
-  path: string | null;
-  diff: string;
-  dirty: boolean;
-  not_a_repo?: boolean;
-}
-
 function fmtSize(b: number): string {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
@@ -123,33 +116,161 @@ export function ProjectTree({ slug }: { slug: string }) {
   );
 }
 
+interface DiffFiles {
+  files: Array<{
+    path: string;
+    status: string;       // M, A, D, R, ??
+    additions: number;
+    deletions: number;
+    is_binary: boolean;
+  }>;
+  not_a_repo?: boolean;
+  error?: string;
+}
+
+interface DiffFileContent {
+  path: string;
+  diff?: string;
+  not_a_repo?: boolean;
+  error?: string;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  M: "modificado",
+  A: "añadido",
+  D: "borrado",
+  R: "renombrado",
+  "??": "untracked",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const label = STATUS_LABEL[status] ?? status;
+  const cls = status === "A" ? "tag ok" : status === "D" ? "tag err" : status === "??" ? "tag" : "tag warn";
+  return <span className={cls}>{label}</span>;
+}
+
+function DiffLine({ line }: { line: string }) {
+  // Las primeras 2 columnas de un diff son "indicador + nº de línea" (ej "+
+  // 1"), las saltamos para alinear visualmente con el resto del código.
+  const isAdd = line.startsWith("+") && !line.startsWith("+++");
+  const isDel = line.startsWith("-") && !line.startsWith("---");
+  const text = line.length > 0 ? line.slice(1) : line;
+  return (
+    <div className={isAdd ? "diff-line add" : isDel ? "diff-line del" : "diff-line"}>
+      <span className="diff-gutter">{isAdd ? "+" : isDel ? "-" : " "}</span>
+      <span className="diff-text">{text || " "}</span>
+    </div>
+  );
+}
+
 export function ProjectDiff({ slug }: { slug: string }) {
-  const q = useQuery({
-    queryKey: ["diff", slug],
-    queryFn: () => api<Diff>(`/api/v1/projects/${slug}/diff/`),
+  const filesQ = useQuery({
+    queryKey: ["diff-files", slug],
+    queryFn: () => api<DiffFiles>(`/api/v1/projects/${slug}/diff/files/`),
     enabled: !!slug,
-    refetchInterval: 5000, // refresca cada 5s mientras el agente trabaja
+    refetchInterval: 5000,
   });
-  if (q.isLoading) return <p className="meta">Cargando diff…</p>;
-  if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
-  const d = q.data;
-  if (!d) return null;
-  if (d.not_a_repo) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  if (filesQ.isLoading) return <p className="meta">Cargando diff…</p>;
+  if (filesQ.error) return <p className="msg error">Error: {String(filesQ.error)}</p>;
+  const data = filesQ.data;
+  if (!data) return null;
+  if (data.not_a_repo) {
     return <p className="meta">El proyecto no es un repo git — sin diff.</p>;
   }
+  const files = data.files ?? [];
+  const totalAdds = files.reduce((s, f) => s + (f.additions || 0), 0);
+  const totalDels = files.reduce((s, f) => s + (f.deletions || 0), 0);
+  const dirty = files.length > 0;
+
+  const toggle = (path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
   return (
     <div>
-      <div className="meta">
-        {d.dirty ? "🟠 Cambios sin commit" : "✓ Working tree limpio"}
+      <div className="diff-header">
+        <span>
+          {dirty
+            ? `${files.length} archivo${files.length === 1 ? "" : "s"} con cambios`
+            : "Working tree limpio"}
+        </span>
+        {dirty && (
+          <span style={{ marginLeft: "auto", display: "flex", gap: "0.4rem", fontFamily: "ui-monospace, monospace" }}>
+            <span style={{ color: "#1a7f37", fontWeight: 600 }}>+{totalAdds}</span>
+            <span style={{ color: "#cf222e", fontWeight: 600 }}>−{totalDels}</span>
+          </span>
+        )}
       </div>
-      {d.diff && (
-        <pre className="unboxed" style={{ marginTop: "0.3rem", maxHeight: 320, overflow: "auto" }}>
-          {d.diff}
-        </pre>
-      )}
-      {!d.diff && d.dirty === false && (
-        <p className="meta">No hay cambios pendientes.</p>
-      )}
+      {files.length === 0 && <p className="meta">No hay cambios pendientes.</p>}
+      <ul className="diff-tree">
+        {files.map((f) => (
+          <li key={f.path} className="diff-item">
+            <button
+              type="button"
+              className="diff-row"
+              onClick={() => !f.is_binary && toggle(f.path)}
+              aria-expanded={expanded.has(f.path)}
+              disabled={f.is_binary}
+            >
+              <span className="diff-chevron" aria-hidden>
+                {f.is_binary ? "" : expanded.has(f.path) ? "▾" : "▸"}
+              </span>
+              <span className="diff-filename">
+                <StatusBadge status={f.status} />{" "}
+                <code>{f.path}</code>
+              </span>
+              {!f.is_binary && (
+                <span className="diff-counts">
+                  <span style={{ color: "#1a7f37" }}>+{f.additions}</span>
+                  <span style={{ color: "#cf222e", marginLeft: "0.4rem" }}>−{f.deletions}</span>
+                </span>
+              )}
+              {f.is_binary && (
+                <span className="diff-counts meta">binario</span>
+              )}
+            </button>
+            {expanded.has(f.path) && !f.is_binary && (
+              <DiffBody slug={slug} path={f.path} />
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
+  );
+}
+
+function DiffBody({ slug, path }: { slug: string; path: string }) {
+  const q = useQuery({
+    queryKey: ["diff-file", slug, path],
+    queryFn: () => api<DiffFileContent>(
+      `/api/v1/projects/${slug}/diff/file/?path=${encodeURIComponent(path)}`,
+    ),
+  });
+  if (q.isLoading) return <p className="meta" style={{ padding: "0.4rem 1.5rem" }}>Cargando diff…</p>;
+  if (q.error || !q.data || q.data.error) {
+    return <p className="msg error" style={{ padding: "0.4rem 1.5rem" }}>Error: {String(q.error ?? q.data?.error)}</p>;
+  }
+  const lines = (q.data.diff || "").split("\n");
+  // Filtramos los headers de archivo "diff --git" / "index" / "---" / "+++" si
+  // están al inicio (visual redundante con la fila clickeable). Conservamos las
+  // líneas "@@ …" como separadores hunks.
+  return (
+    <pre className="diff-body unboxed">
+      {lines.map((ln, i) => {
+        if (ln.startsWith("diff --git") || ln.startsWith("index ")) return null;
+        if (ln === "---" || ln === "+++") return null;
+        if (ln.startsWith("@@")) {
+          return <div key={i} className="diff-hunk">{ln}</div>;
+        }
+        return <DiffLine key={i} line={ln} />;
+      })}
+    </pre>
   );
 }

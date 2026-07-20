@@ -365,6 +365,63 @@ def test_project_git_not_a_repo(tmp_path):
     assert body["branch"] is None
 
 
+def test_project_diff_files_lists_modified_with_counts(tmp_path):
+    """FASE UX-R.1: /diff/files/ devuelve lista con +/− counts por archivo."""
+    p = _project("df", tmp_path)
+    base = Path(p.path)
+    base.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=base, check=True)
+    (base / "a.txt").write_text("uno\ndos\n")
+    subprocess.run(["git", "add", "."], cwd=base, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=base, check=True)
+    (base / "a.txt").write_text("uno\nDOS\ntres\n")
+    c = _client_verified()
+    r = c.get(f"/api/v1/projects/{p.slug}/diff/files/")
+    assert r.status_code == 200
+    files = r.json()["files"]
+    assert len(files) == 1
+    f = files[0]
+    assert f["path"] == "a.txt"
+    assert f["status"] == "M"
+    assert f["additions"] == 2
+    assert f["deletions"] == 1
+    assert f["is_binary"] is False
+
+
+def test_project_diff_file_returns_diff_for_specific_path(tmp_path):
+    """FASE UX-R.1: /diff/file/?path= devuelve el diff de un solo archivo."""
+    p = _project("dff", tmp_path)
+    base = Path(p.path)
+    base.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=base, check=True)
+    (base / "x.py").write_text("uno")
+    subprocess.run(["git", "add", "."], cwd=base, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=base, check=True)
+    (base / "x.py").write_text("dos")
+    c = _client_verified()
+    r = c.get(f"/api/v1/projects/{p.slug}/diff/file/?path=x.py")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == "x.py"
+    assert "-uno" in body["diff"]
+    assert "+dos" in body["diff"]
+
+
+def test_project_diff_file_path_traversal_blocked(tmp_path):
+    """FASE C.5 path-traversal OBLIGATORIO: path=../etc/passwd → 403."""
+    p = _project("dt", tmp_path)
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    c = _client_verified()
+    r = c.get(f"/api/v1/projects/{p.slug}/diff/file/?path=../../etc/passwd")
+    assert r.status_code == 403
+
+
 # ---------- /api/v1/permissions/ (regression D11) ----------
 
 def test_permissions_list_filters_by_live_pending(tmp_path):
