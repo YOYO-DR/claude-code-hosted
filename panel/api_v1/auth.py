@@ -19,10 +19,12 @@ def _is_verified(request) -> bool:
     `otp_login()` se acaba de llamar dentro del MISMO request, el atributo
     del modelo User (que es plano) sigue False — el OTPMiddleware aún no
     ha tenido oportunidad de reasignar el user. Pero la sesión YA tiene
-    `_otp_device_id` seteada. La forma robusta: leer de la sesión.
+    `otp_device_id` seteada (django_otp.login escribe en la sesión
+    inmediatamente). La forma robusta: leer de la sesión.
     """
     # 1) Sesión tiene el device verificado (caso normal tras otp_login).
-    if request.session.get("_otp_device_id"):
+    # django_otp usa 'otp_device_id' como clave (DEVICE_ID_SESSION_KEY).
+    if request.session.get("otp_device_id"):
         return True
     # 2) Fallback: invocar user.is_verified() por si el middleware ya marcó.
     user = getattr(request, "user", None)
