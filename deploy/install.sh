@@ -77,12 +77,24 @@ if [[ "${1:-}" == "--update" ]]; then
 
   echo "==> Build de la SPA (FASE C)"
   cd "$REPO_DIR/panel/ui/spa"
-  if command -v pnpm >/dev/null 2>&1 && [[ -f package.json ]]; then
-    pnpm install --frozen-lockfile 2>&1 | tail -3 || pnpm install 2>&1 | tail -3
-    pnpm build 2>&1 | tail -5
-  else
-    echo "  pnpm no disponible o sin package.json — salto el build de la SPA."
-    echo "  (la UI legacy en templates sigue sirviéndose mientras tanto)"
+  if [[ -f package.json ]]; then
+    # Preferimos pnpm (rápido, lockfile estricto); fallback a npm si no está.
+    if command -v pnpm >/dev/null 2>&1; then
+      PKG=pnpm
+      pnpm install --frozen-lockfile 2>&1 | tail -3 \
+        || pnpm install 2>&1 | tail -3
+      pnpm build 2>&1 | tail -5
+    elif command -v npm >/dev/null 2>&1; then
+      PKG=npm
+      npm ci 2>&1 | tail -3 || npm install 2>&1 | tail -3
+      # pnpm ejecuta `tsc --noEmit && vite build` vía `npm run build`.
+      npm run build 2>&1 | tail -8
+    else
+      echo "  ni pnpm ni npm disponibles — salto el build de la SPA."
+      echo "  (la UI legacy en templates sigue sirviéndose mientras tanto)"
+      PKG=""
+    fi
+    echo "  SPA build (${PKG:-skip}): $(ls -1 dist/ 2>/dev/null | wc -l) archivos en dist/"
   fi
 
   echo "==> Migraciones + collectstatic"
