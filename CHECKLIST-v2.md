@@ -67,7 +67,6 @@ ambos (crudo + normalizado), golden tests con fixtures del VPS.
 
 ---
 
-## FASE B — Contrato UIEvent v1 ✅
 
 > **Estado**: ✅ cerrada y desplegada. Commit `3eb0189` en `main`.
 
@@ -136,7 +135,6 @@ MiniMax-M3: **92 eventos crudos, 9 con UIEvent poblado**.
 
 ---
 
-## D13 — Warning si el PAT no tiene push sobre el repo del proyecto
 
 > **Estado**: ✅ cerrada y desplegada. Commit `0efb4c0` en `main`.
 
@@ -315,3 +313,68 @@ Tras C.
 ## FASE E — Endurecimiento y cierre (pendiente)
 
 Tras D.
+
+---
+
+## FASE D — Admin de modelos + selector en el chat ✅
+
+> **Estado**: ✅ cerrada y desplegada. Commit `d438205` en `main`.
+
+### Backend (panel/api_v1/models.py + panel/core/services/models.py)
+
+- `GET /api/v1/models/` — lista profiles con `has_token` (no expone el
+  token). Decorador `@require_verified_json`.
+- `POST /api/v1/models/create/` — crea con `auth_token` write-only
+  (Fernet MultiFernet). El token NUNCA aparece en la respuesta, ni
+  siquiera cifrado.
+- `PATCH /api/v1/models/<pk>/update/` — name, provider, model,
+  base_url, auth_token (string vacío BORRA el token).
+- `DELETE /api/v1/models/<pk>/delete/` — 409 si el profile está en
+  uso por algún proyecto (defensa contra referencias huérfanas).
+- `POST /api/v1/models/<pk>/test/` — ping al `base_url` con Bearer
+  token; devuelve `{ok, status, model, provider}` o error sin filtrar
+  el token.
+- `POST /api/v1/projects/<slug>/model/` — cambia `model_profile` del
+  proyecto; devuelve `{needs_restart: true}` si difiere del actual.
+
+### Servicio (panel/core/services/models.py)
+
+- `get_token(profile)` — descifra con Fernet (NO `.decode("utf-8")`
+  extra — `crypto.decrypt` ya retorna str).
+- `store_token(profile, token)` — cifra con Fernet.
+- `serialize(profile)` — write-only: omite `auth_token_enc`, solo expone
+  `has_token` (bool) para que el SPA muestre el badge token/sin token.
+- `ping(profile)` — httpx al base_url con Authorization Bearer; ok/error
+  sin filtrar token.
+
+### Frontend (panel/ui/spa/src/pages/Models.tsx + router + SessionDetail)
+
+- `/models` page con CRUD: lista, crear, probar, editar (reemplaza
+  token), borrar con confirm. Cada perfil tiene badge `token` (verde)
+  / `sin token` (rojo) — NUNCA se muestra el valor del token.
+- `/models` link en el navbar (entre GitHub y Aprobaciones).
+- `ModelSelector` en SessionDetail header: dropdown con todos los
+  ModelProfile disponibles; al cambiar → POST al endpoint del proyecto
+  → mensaje verde "Modelo cambiado — reinicia la sesión para aplicar".
+
+### Tests (tests/api_v1/test_api_v1.py, +10)
+
+- `test_models_list_returns_profiles`
+- `test_model_create_with_token_does_not_echo_token` ← grep exhaustivo
+- `test_model_list_does_not_include_token` ← grep exhaustivo
+- `test_model_update_can_replace_token` ← PATCH con auth_token nuevo
+- `test_model_update_can_clear_token` ← PATCH con auth_token=""
+- `test_model_test_does_not_echo_token` ← ping no filtra
+- `test_model_delete_blocked_if_used_by_project` ← defensa FK
+- `test_model_delete_succeeds_if_unused`
+- `test_set_project_model_changes_model` ← {needs_restart: true}
+- `test_grep_token_does_not_appear_anywhere` ← grep exhaustivo
+
+### Validación E2E en VPS
+
+| Ítem | Resultado |
+|------|-----------|
+| Página /models carga 4 perfiles con badges token | ✅ screenshot confirmado |
+| Selector visible en SessionDetail header | ✅ "modelo: [anthropic-default (minimax) ▾]" |
+| Regresión completa: **189/189 verde** | ✅ (179 + 10 FASE D) |
+| `ruff` + `mypy` limpios | ✅ |
