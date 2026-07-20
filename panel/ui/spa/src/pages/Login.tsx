@@ -46,23 +46,9 @@ export function LoginPage() {
   }
 
   return (
-    <form
-      onSubmit={submit}
-      style={{ maxWidth: 360, margin: "4rem auto", display: "grid", gap: "0.6rem" }}
-    >
+    <form className="login" onSubmit={submit}>
       <h1>Login</h1>
-      {error && (
-        <div
-          style={{
-            background: "#f8d7da",
-            color: "#842029",
-            padding: "0.5rem",
-            borderRadius: 4,
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {error && <div className="msg error">{error}</div>}
       <input
         placeholder="usuario"
         value={username}
@@ -87,7 +73,7 @@ export function LoginPage() {
         autoComplete="one-time-code"
         required
       />
-      <button type="submit" disabled={busy}>
+      <button type="submit" className="primary" disabled={busy}>
         {busy ? "Entrando…" : "Entrar"}
       </button>
     </form>

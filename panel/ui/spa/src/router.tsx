@@ -19,29 +19,56 @@ export interface RouterContext {
 }
 
 const rootRoute = createRootRoute({
-  component: () => (
+  component: RootLayout,
+});
+
+function RootLayout() {
+  // Si NO hay sesión, mostramos un header mínimo (solo el título).
+  // Si la hay, mostramos los enlaces a las secciones.
+  // `me` viene del contexto del router (actualizado en boot()).
+  const me = (router.options.context as { me?: import("@/lib/me").CurrentUser | null } | undefined)?.me ?? null;
+  const authed = !!me?.is_verified;
+  return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <header style={{
-        display: "flex", gap: "1rem", alignItems: "center",
-        padding: "0.6rem 1rem", borderBottom: "1px solid #8884",
-      }}>
+      <header className="app-header">
         <strong>
-          <a href="/" style={{ textDecoration: "none", color: "inherit" }}>Claude Code · Panel</a>
+          <a href="/" style={{ textDecoration: "none", color: "inherit" }}>
+            Claude Code · Panel
+          </a>
         </strong>
-        <nav style={{ display: "flex", gap: "0.8rem" }}>
-          <a href="/sessions" style={{ textDecoration: "none" }}>Sesiones</a>
-          <a href="/projects" style={{ textDecoration: "none" }}>Proyectos</a>
-          <a href="/mcps" style={{ textDecoration: "none" }}>MCPs</a>
-          <a href="/github" style={{ textDecoration: "none" }}>GitHub</a>
-          <a href="/permissions" style={{ textDecoration: "none" }}>Aprobaciones</a>
-        </nav>
+        {authed && (
+          <nav>
+            <a href="/sessions">Sesiones</a>
+            <a href="/projects">Proyectos</a>
+            <a href="/mcps">MCPs</a>
+            <a href="/github">GitHub</a>
+            <a href="/permissions">Aprobaciones</a>
+          </nav>
+        )}
+        {authed && me && (
+          <span className="right">
+            <span>{me.username}</span>
+            <form
+              method="post"
+              action="/api/v1/logout/"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void fetch("/api/v1/logout/", {
+                  method: "POST", credentials: "include",
+                }).then(() => { window.location.href = "/"; });
+              }}
+            >
+              <button type="submit">Salir</button>
+            </form>
+          </span>
+        )}
       </header>
-      <main style={{ flex: 1, padding: "1rem", maxWidth: 1200, margin: "0 auto", width: "100%" }}>
+      <main>
         <Outlet />
       </main>
     </div>
-  ),
-});
+  );
+}
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,

@@ -1,12 +1,6 @@
 // Vista Sesión (FASE C.4) — Layout OpenHands: chat izquierda, panel lateral derecho.
 //
 // Chat: discriminated union UIEvent v1 por kind (FASE B).
-//   - agent_text → burbuja con streaming cursor si streaming=true
-//   - agent_thinking → colapsable
-//   - tool_call → tarjeta con input; tool_result del mismo tool_use_id se une
-//   - permission_request → inline con botones Permitir/Denegar
-//   - run_result → tarjeta de resumen
-//   - session_status, git_branch, error → tarjetas discretas
 // Panel lateral: placeholders (FASE C.5 archivos+diff, C.6 rama).
 
 import { useEffect, useRef, useState } from "react";
@@ -39,9 +33,14 @@ function useSession(id: string) {
   });
 }
 
+function useSessionIdFromPath(): string {
+  const path = window.location.pathname;
+  const m = path.match(/^\/sessions\/([0-9a-f-]{36})/);
+  return m && m[1] ? m[1] : "";
+}
+
 export function SessionPage() {
-  const params = new URLSearchParams(window.location.search);
-  const sid = window.location.pathname.split("/").filter(Boolean)[1] ?? params.get("sid") ?? "";
+  const sid = useSessionIdFromPath();
   const sessQ = useSession(sid);
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [wsState, setWsState] = useState<string>("connecting");
@@ -119,8 +118,9 @@ export function SessionPage() {
       api(`/api/v1/permissions/${id}/resolve/`, { method: "POST", body: { answer } }),
   });
 
+  if (!sid) return <p className="msg error">URL inválida — falta session id.</p>;
   if (sessQ.isLoading) return <p>Cargando sesión…</p>;
-  if (sessQ.error) return <p>Error: {String(sessQ.error)}</p>;
+  if (sessQ.error) return <p className="msg error">Error: {String(sessQ.error)}</p>;
   const sess = sessQ.data;
   if (!sess) return null;
 
@@ -136,48 +136,42 @@ export function SessionPage() {
 
   return (
     <div>
-      <p>
+      <p style={{ margin: "0 0 0.6rem" }}>
         <a href="/sessions">← Sesiones</a>
       </p>
       <h1>
-        Sesión <span style={{ opacity: 0.6, fontSize: "0.8em" }}>{sid.slice(0, 8)}</span>
+        Sesión <span style={{ color: "var(--muted)", fontSize: "0.7em" }}>{sid.slice(0, 8)}</span>
       </h1>
-      <p style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
         <span>Proyecto: <strong>{sess.project}</strong></span>
-        <span>Estado: <span style={{ border: "1px solid #8886", padding: "0 0.4rem", borderRadius: 4 }}>{sess.status}</span></span>
+        <span>
+          Estado:{" "}
+          <span style={{ border: "1px solid var(--border)", padding: "0 0.4rem", borderRadius: 4 }}>
+            {sess.status}
+          </span>
+        </span>
         <span>Costo: ${sess.total_cost_usd.toFixed(4)}</span>
-        <span>WS: {wsState}</span>
-        <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending}>■ Stop</button>
-      </p>
+        <span style={{ color: "var(--muted)" }}>WS: {wsState}</span>
+        <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending}>
+          ■ Stop
+        </button>
+      </div>
       {sess.github_warn_no_push && (
-        <div
-          style={{
-            background: "#fff3cd",
-            color: "#664d03",
-            border: "1px solid #ffe69c",
-            padding: "0.5rem",
-            borderRadius: 4,
-            marginBottom: "0.8rem",
-          }}
-        >
-          ⚠️ El PAT actual no tiene permisos de push sobre el repo.
-          <code>git push</code> y PR fallarán.
+        <div className="msg warning">
+          ⚠️ El PAT actual <strong>no tiene permisos de push</strong> sobre{" "}
+          <code>{sess.project_slug}</code>. El agente podrá leer y trabajar en
+          local, pero <code>git push</code> y abrir PR fallarán con 403 hasta
+          que regeneres el token con scope adecuado en{" "}
+          <a href="/github">/github/</a>.
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1rem", alignItems: "start" }}>
-        <section
-          style={{
-            border: "1px solid #8884",
-            borderRadius: 6,
-            background: "#0001",
-            height: "60vh",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <div ref={scrollerRef} style={{ flex: 1, overflowY: "auto", padding: "0.5rem" }}>
-            {bubbles.length === 0 && <p style={{ opacity: 0.6 }}>Esperando eventos…</p>}
+      <div className="session-layout">
+        <section className="chat">
+          <div ref={scrollerRef} className="scroller">
+            {bubbles.length === 0 && (
+              <p style={{ color: "var(--muted)", padding: "0.5rem" }}>Esperando eventos…</p>
+            )}
             {bubbles.map((b) => (
               <BubbleView
                 key={b.key}
@@ -188,6 +182,7 @@ export function SessionPage() {
             ))}
           </div>
           <form
+            className="input-bar"
             onSubmit={(e) => {
               e.preventDefault();
               const text = input.trim();
@@ -195,29 +190,30 @@ export function SessionPage() {
               sendMut.mutate(text);
               setInput("");
             }}
-            style={{ borderTop: "1px solid #8884", display: "flex", padding: "0.4rem", gap: "0.4rem" }}
           >
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={sendOnEnter}
               placeholder="Mensaje al agente (Ctrl/Cmd+Enter)"
-              rows={2}
-              style={{ flex: 1, resize: "vertical" }}
             />
-            <button type="submit" disabled={sendMut.isPending}>Enviar</button>
+            <button type="submit" className="primary" disabled={sendMut.isPending}>
+              Enviar
+            </button>
           </form>
         </section>
 
-        <aside style={{ display: "grid", gap: "0.5rem" }}>
+        <aside style={{ display: "grid", gap: "0.6rem" }}>
           <h3>Proyecto</h3>
-          <p><a href={`/projects/${sess.project_slug}`}>{sess.project}</a></p>
+          <p>
+            <a href={`/projects/${sess.project_slug}`}>{sess.project}</a>
+          </p>
           <h3>Archivos</h3>
-          <p style={{ opacity: 0.6, fontSize: "0.9em" }}>(FASE C.5: tree + file browser con guard de path traversal)</p>
+          <p className="placeholder">(FASE C.5: tree + file browser con guard de path traversal)</p>
           <h3>Cambios</h3>
-          <p style={{ opacity: 0.6, fontSize: "0.9em" }}>(FASE C.5: git diff)</p>
+          <p className="placeholder">(FASE C.5: git diff)</p>
           <h3>Rama</h3>
-          <p style={{ opacity: 0.6, fontSize: "0.9em" }}>(FASE C.6: git_branch watcher en vivo)</p>
+          <p className="placeholder">(FASE C.6: git_branch watcher en vivo)</p>
         </aside>
       </div>
     </div>
@@ -235,46 +231,36 @@ function BubbleView({
 }) {
   const ui = bubble.ui;
   if (!ui) return null;
-  const cardStyle: React.CSSProperties = {
-    margin: "0.3rem 0",
-    padding: "0.4rem 0.6rem",
-    borderLeft: "3px solid #8886",
-    background: "#fff1",
-  };
   const p = ui.payload as Record<string, unknown>;
   switch (ui.kind) {
     case "agent_text":
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#4a90d9" }}>
+        <div className="bubble agent-text">
           <span>{String(p.text ?? "")}</span>
           {p.streaming ? <span style={{ opacity: 0.5 }}>▍</span> : null}
-          {p.from_user ? <div style={{ opacity: 0.6, fontSize: "0.85em" }}>(usuario)</div> : null}
+          {p.from_user ? (
+            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>(usuario)</div>
+          ) : null}
         </div>
       );
     case "agent_thinking":
       return (
-        <details style={{ ...cardStyle, borderLeftColor: "#a8a" }}>
-          <summary style={{ opacity: 0.7, cursor: "pointer" }}>pensando…</summary>
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{String(p.text ?? "")}</pre>
+        <details className="bubble agent-thinking">
+          <summary>pensando…</summary>
+          <pre>{String(p.text ?? "")}</pre>
         </details>
       );
     case "tool_call": {
       const awaiting = Boolean(p.awaiting_permission);
       const hasResult = Boolean(bubble.result);
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#e8a" }}>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <div className="bubble tool-call">
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
             <code>{String(p.name ?? "")}</code>
-            {awaiting && (
-              <span style={{ background: "#f0c", color: "#fff", padding: "0 0.4rem", borderRadius: 4 }}>
-                esperando permiso
-              </span>
-            )}
+            {awaiting && <span className="tag warn">esperando permiso</span>}
             {hasResult && <span style={{ opacity: 0.6, fontSize: "0.85em" }}>(resultado ↓)</span>}
           </div>
-          <pre style={{ whiteSpace: "pre-wrap", margin: "0.3rem 0 0", fontSize: "0.85em", maxHeight: 200, overflow: "auto" }}>
-            {JSON.stringify(p.input ?? {}, null, 2)}
-          </pre>
+          <pre>{JSON.stringify(p.input ?? {}, null, 2)}</pre>
           {hasResult && bubble.result?.ui_event && (
             <ToolResultView ui={bubble.result.ui_event} />
           )}
@@ -284,24 +270,34 @@ function BubbleView({
     case "permission_request": {
       const id = String(p.id ?? "");
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#c33", background: "#fff3" }}>
+        <div className="bubble permission-request">
           <div>
-            <strong>{String(p.tool ?? "")}</strong>
-            <span style={{ opacity: 0.6, fontSize: "0.85em" }}> · id={id.slice(0, 8)}</span>
+            <strong>{String(p.tool ?? "")}</strong>{" "}
+            <span style={{ opacity: 0.6, fontSize: "0.85em" }}>· id={id.slice(0, 8)}</span>
           </div>
-          <pre style={{ whiteSpace: "pre-wrap", margin: "0.3rem 0", fontSize: "0.85em" }}>
-            {String(p.input_preview ?? "")}
-          </pre>
+          <pre>{String(p.input_preview ?? "")}</pre>
           <div style={{ display: "flex", gap: "0.4rem" }}>
-            <button onClick={() => onResolvePerm(id, "allow")} disabled={resolving}>Permitir</button>
-            <button onClick={() => onResolvePerm(id, "deny")} disabled={resolving}>Denegar</button>
+            <button
+              className="primary"
+              onClick={() => onResolvePerm(id, "allow")}
+              disabled={resolving}
+            >
+              Permitir
+            </button>
+            <button
+              className="danger"
+              onClick={() => onResolvePerm(id, "deny")}
+              disabled={resolving}
+            >
+              Denegar
+            </button>
           </div>
         </div>
       );
     }
     case "run_result":
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#3c9" }}>
+        <div className={`bubble run-result ${p.ok ? "" : "error"}`}>
           <strong>{p.ok ? "✓ Turno OK" : "✗ Turno con error"}</strong>{" "}
           <span style={{ opacity: 0.7 }}>
             ${Number(p.cost_usd ?? 0).toFixed(4)} · {String(p.num_turns ?? 0)} turnos
@@ -311,23 +307,21 @@ function BubbleView({
       );
     case "session_status":
       return (
-        <div style={{ ...cardStyle, opacity: 0.7, borderLeftColor: "#888" }}>
+        <div className="bubble session-status">
           session_status: <code>{String(p.status ?? "")}</code>
           {p.model ? <> · model=<code>{String(p.model)}</code></> : null}
         </div>
       );
     case "git_branch":
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#888" }}>
+        <div className="bubble git-branch">
           rama: <code>{String(p.branch ?? "")}</code>
-          {p.dirty ? <span style={{ color: "#c33" }}> ● dirty</span> : null}
+          {p.dirty ? <span style={{ color: "var(--err-fg)" }}> ● dirty</span> : null}
         </div>
       );
     case "error":
       return (
-        <div style={{ ...cardStyle, borderLeftColor: "#c33", background: "#fdd" }}>
-          {String(p.message ?? "error")}
-        </div>
+        <div className="bubble error">{String(p.message ?? "error")}</div>
       );
     case "tool_result":
     case "permission_resolved":
@@ -339,19 +333,9 @@ function ToolResultView({ ui }: { ui: UIEvent }) {
   const p = ui.payload as { ok?: boolean; output?: unknown };
   const ok = Boolean(p.ok);
   return (
-    <div
-      style={{
-        marginTop: "0.4rem",
-        padding: "0.3rem 0.5rem",
-        background: ok ? "#dfd" : "#fdd",
-        borderRadius: 4,
-        fontSize: "0.85em",
-      }}
-    >
+    <div className={`bubble tool-result ${ok ? "" : "error"}`} style={{ marginTop: "0.4rem" }}>
       <strong>{ok ? "OK" : "ERROR"}</strong>
-      <pre style={{ whiteSpace: "pre-wrap", margin: "0.2rem 0 0", maxHeight: 200, overflow: "auto" }}>
-        {typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "", null, 2)}
-      </pre>
+      <pre>{typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "", null, 2)}</pre>
     </div>
   );
 }

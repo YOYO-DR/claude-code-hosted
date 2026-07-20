@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { router } from "@/router";
 import { fetchMe } from "@/lib/me";
+import "@/styles.css";
 
 async function boot() {
   const me = await fetchMe();
