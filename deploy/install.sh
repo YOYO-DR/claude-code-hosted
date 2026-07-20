@@ -154,6 +154,11 @@ usermod -aG docker agents
 runuser -u agents -- git config --global user.email "agente@claude-code-hosted.local" || true
 runuser -u agents -- git config --global user.name "Agente Claude Code" || true
 runuser -u agents -- git config --global --add safe.directory '*' || true
+# El user `panel` también invoca git (endpoints /diff/, /git/, ttyd); sin
+# safe.directory los workspaces owned by `agents` disparan el guard
+# "dubious ownership" y los endpoints devuelven 500 (FASE E.4).
+runuser -u panel -- git config --global --add safe.directory '*' 2>/dev/null || \
+  git config --global --add safe.directory '*' || true
 
 echo "==> Directorios"
 install -d -o panel  -g panel  -m 0755 "$REPO_DIR"

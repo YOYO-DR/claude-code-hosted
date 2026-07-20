@@ -323,6 +323,48 @@ def test_project_diff_runs_git(tmp_path):
     assert body["dirty"] is True
 
 
+def test_project_git_branch_and_dirty(tmp_path):
+    """FASE E.4: /api/v1/projects/<slug>/git/ devuelve branch + dirty para un
+    repo git inicializado. Coverage del endpoint que faltaba (el SPA RamaTab
+    mostraba rama: ?)."""
+    p = _project("g1", tmp_path)
+    base = Path(p.path)
+    base.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=base, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=base, check=True)
+    (base / "x.txt").write_text("hola")
+    subprocess.run(["git", "add", "."], cwd=base, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=base, check=True)
+    # Sin cambios: dirty=False
+    c = _client_verified()
+    r = c.get(f"/api/v1/projects/{p.slug}/git/")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["branch"] == "main"
+    assert body["dirty"] is False
+    assert "not_a_repo" not in body
+    # Con cambio: dirty=True
+    (base / "x.txt").write_text("adios")
+    r = c.get(f"/api/v1/projects/{p.slug}/git/")
+    body = r.json()
+    assert body["dirty"] is True
+    assert body["branch"] == "main"
+
+
+def test_project_git_not_a_repo(tmp_path):
+    """Si el path NO es un repo, devuelve 200 con not_a_repo=true."""
+    p = _project("g2", tmp_path)
+    # No inicializamos git → not_a_repo=true
+    c = _client_verified()
+    r = c.get(f"/api/v1/projects/{p.slug}/git/")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["not_a_repo"] is True
+    assert body["branch"] is None
+
+
 # ---------- /api/v1/permissions/ (regression D11) ----------
 
 def test_permissions_list_filters_by_live_pending(tmp_path):

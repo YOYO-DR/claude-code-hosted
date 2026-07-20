@@ -207,3 +207,58 @@ def project_diff(request: HttpRequest, slug: str) -> JsonResponse:
         "diff": proc.stdout,
         "dirty": bool(status_proc.stdout.strip()),
     })
+
+
+@require_GET
+@require_verified_json
+def project_git(request: HttpRequest, slug: str) -> JsonResponse:
+    """GET /api/v1/projects/<slug>/git/
+    Devuelve la rama actual + flag dirty del repo. Endpoint consumido por
+    la pestaña "Rama" del SPA. Maneja "no es repo" / "dubious ownership"
+    / path inexistente devolviendo 200 con `not_a_repo=true` para que el
+    SPA pueda mostrar un placeholder limpio en lugar de un error.
+    """
+    p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    if not Path(p.path).is_dir():
+        # Path aún no provisionado (clone no llegó a feliz término) o
+        # archivado con path limpiado a mano.
+        return JsonResponse({
+            "branch": None,
+            "dirty": False,
+            "not_a_repo": True,
+        })
+    branch_proc = subprocess.run(
+        ["git", "-C", p.path, "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, timeout=10,
+    )
+    # Detectar "no es repo" / "cannot change to" / "dubious ownership".
+    stderr = branch_proc.stderr or ""
+    not_a_repo = (
+        branch_proc.returncode != 0
+        and (
+            "not a git repository" in stderr
+            or "cannot change to" in stderr
+        )
+    )
+    if not_a_repo:
+        return JsonResponse({
+            "branch": None,
+            "dirty": False,
+            "not_a_repo": True,
+        })
+    if branch_proc.returncode != 0:
+        # Dubious ownership u otro error — devolvemos 200 con error en
+        # el cuerpo para que el SPA pueda mostrar mensaje sin romper.
+        return JsonResponse({
+            "branch": None,
+            "dirty": False,
+            "error": stderr.strip() or f"git rc={branch_proc.returncode}",
+        })
+    status_proc = subprocess.run(
+        ["git", "-C", p.path, "status", "--porcelain"],
+        capture_output=True, text=True, timeout=10,
+    )
+    return JsonResponse({
+        "branch": branch_proc.stdout.strip(),
+        "dirty": bool(status_proc.stdout.strip()),
+    })
