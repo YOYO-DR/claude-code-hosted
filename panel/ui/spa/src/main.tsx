@@ -24,8 +24,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-async function boot() {
-  const me = await fetchMe();
+function boot(): void {
+  // NO llamamos fetchMe aquí: AuthProvider ya lo hace en mount.
+  // Hacerlo dos veces duplicaba /api/v1/me/ en el boot.
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 5_000 } },
   });
@@ -38,24 +39,20 @@ async function boot() {
         <AuthProvider>
           <RouterProvider
             router={router}
-            // El contexto se mantiene vacío — `me` vive en AuthContext ahora.
             context={{ queryClient }}
           />
         </AuthProvider>
       </QueryClientProvider>
     </React.StrictMode>,
   );
-  // Si al boot ya había sesión, también actualizamos el AuthContext.
-  if (me) {
-    // Re-emit via dispatchEvent sería más limpio, pero basta con refresh().
-    // AuthProvider hace refresh en mount, así que esto es redundante.
-  }
 }
 
-boot().catch((err: unknown) => {
+try {
+  boot();
+} catch (err: unknown) {
   console.error("[boot] fatal:", err);
   const rootEl = document.getElementById("root");
   if (rootEl) {
     rootEl.innerHTML = `<pre style="color:#c33;padding:1rem">boot error: ${String(err)}</pre>`;
   }
-});
+}
