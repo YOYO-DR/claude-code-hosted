@@ -25,6 +25,9 @@ interface Bubble {
   raw: RawEventMessage;
   ui: UIEvent | null;
   result?: RawEventMessage;
+  // Para agrupación: el primer evento del grupo lleva la key del grupo;
+  // los deltas subsiguientes actualizan el mismo Bubble.
+  groupKey: string;
 }
 
 function useSession(id: string) {
@@ -32,6 +35,89 @@ function useSession(id: string) {
     queryKey: ["session", id],
     queryFn: () => api<Session>(`/api/v1/sessions/${id}/`),
   });
+}
+
+/** Agrupa eventos del SDK en bubbles por bloque/turno.
+
+  Reglas:
+  - agent_text + stream.content_block_delta (text) → 1 bubble por bloque
+    (el primer evento crea, los siguientes actualizan el mismo).
+  - agent_thinking + system.thinking_tokens → 1 bubble por bloque.
+  - tool_call → 1 bubble; tool_result del mismo tool_use_id → actualiza el
+    mismo bubble.
+  - run_result, error, session_status, git_branch → 1 bubble cada uno.
+  - user (mensaje del operador) → 1 bubble por envío, agrupadas por turnId.
+*/
+function groupKey(ev: RawEventMessage, ui: UIEvent | null, turnId?: string): string {
+  if (ui?.kind === "agent_text" || ui?.kind === "agent_thinking") {
+    const p = ui.payload as { tool_use_id?: string };
+    return `text:${p.tool_use_id || ev.seq}`; // fallback a seq si no hay tuid
+  }
+  if (ui?.kind === "tool_call" || ui?.kind === "tool_result") {
+    const p = ui.payload as { tool_use_id?: string };
+    return `tool:${p.tool_use_id || ev.seq}`;
+  }
+  if (ui?.kind === "permission_request") {
+    return `perm:${(ui.payload as { id?: string }).id || ev.seq}`;
+  }
+  if (ui?.kind === "user") {
+    return `user:${turnId || ev.seq}`;
+  }
+  return `evt:${ev.seq}`;
+}
+
+function ingestEvent(
+  prev: Bubble[],
+  msg: RawEventMessage,
+  turnId?: string,
+): Bubble[] {
+  if (!msg.ui_event) return prev; // eventos sin UI (streaming crudo) se ignoran
+  const ui = msg.ui_event;
+  const key = groupKey(msg, ui, turnId);
+  // tool_result: actualiza el tool_call existente en vez de crear uno nuevo
+  if (ui.kind === "tool_result") {
+    const idx = prev.findIndex((b) => b.groupKey === key && b.kind === "tool_call");
+    if (idx >= 0) {
+      const copy = prev.slice();
+      copy[idx] = { ...copy[idx], result: msg, ui: { ...ui, kind: "tool_result" } };
+      return copy;
+    }
+  }
+  // tool_call con tool_result existente: actualiza
+  if (ui.kind === "tool_call") {
+    const idx = prev.findIndex((b) => b.groupKey === key);
+    if (idx >= 0) {
+      const copy = prev.slice();
+      const existing = copy[idx];
+      copy[idx] = {
+        ...existing,
+        raw: msg,
+        ui,
+        result: existing.result, // preserva el result si ya estaba
+      };
+      return copy;
+    }
+  }
+  // agent_text o agent_thinking: actualiza el mismo grupo
+  if (ui.kind === "agent_text" || ui.kind === "agent_thinking") {
+    const idx = prev.findIndex((b) => b.groupKey === key);
+    if (idx >= 0) {
+      const copy = prev.slice();
+      // Actualiza el payload con el último (texto acumula deltas)
+      const merged: UIEvent = {
+        ...ui,
+        payload: { ...ui.payload, ...(prev[idx].ui?.payload ?? {}) },
+        seq: msg.seq,
+      };
+      copy[idx] = { ...copy[idx], raw: msg, ui: merged };
+      return copy;
+    }
+  }
+  // Cualquier otro: append nuevo
+  return [
+    ...prev,
+    { key, groupKey: key, kind: ui.kind, raw: msg, ui },
+  ];
 }
 
 function useSessionIdFromPath(): string {
@@ -55,43 +141,48 @@ export function SessionPage() {
     if (!sessQ.data) return;
     seenSeq.current.clear();
     setBubbles([]);
+    // FASE UX.1: cargar el backlog ANTES de abrir el WS. Si el WS ya
+    // envió los mismos eventos, dedup por seq los ignora.
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api<RawEventMessage[]>(
+          `/api/v1/sessions/${sid}/events/?limit=500`,
+        );
+        if (cancelled) return;
+        setBubbles((prev) => {
+          let next = prev;
+          for (const ev of r) {
+            if (seenSeq.current.has(ev.seq)) continue;
+            seenSeq.current.add(ev.seq);
+            next = ingestEvent(next, ev);
+          }
+          return next;
+        });
+      } catch (err) {
+        console.error("[chat] backlog fetch failed", err);
+      }
+    })();
     const ws = openSessionWs(
       sid,
       {
         onEvent: (msg) => {
           if (seenSeq.current.has(msg.seq)) return;
           seenSeq.current.add(msg.seq);
-          const ui = msg.ui_event;
-          if (!ui) return;
-          setBubbles((prev) => {
-            if (ui.kind === "tool_result") {
-              const toolUseId = (ui.payload as { tool_use_id?: string }).tool_use_id;
-              if (toolUseId) {
-                const idx = prev.findIndex(
-                  (b) =>
-                    b.kind === "tool_call" &&
-                    ((b.ui?.payload as { tool_use_id?: string })?.tool_use_id ?? null) ===
-                      toolUseId,
-                );
-                if (idx >= 0) {
-                  const copy = prev.slice();
-                  const target = copy[idx];
-                  if (target) {
-                    copy[idx] = { ...target, result: msg };
-                    return copy;
-                  }
-                }
-              }
-            }
-            return [...prev, { key: `${ui.kind}-${msg.seq}`, kind: ui.kind, raw: msg, ui }];
-          });
+          setBubbles((prev) => ingestEvent(prev, msg));
         },
         onStateChange: setWsState,
       },
-      0,
+      // last_seq = max seq visto (backlog + WS entrantes)
+      // Para evitar duplicados, abrimos WS con last_seq = max(seenSeq) —
+      // pero el backlog ya populó seenSeq, así que el WS nos manda solo
+      // lo nuevo. Si el WS abre antes de que termine el fetch del backlog,
+      // algunos eventos podrían llegar dos veces (dedup los ignora).
+      seenSeq.current.size,
     );
     wsRef.current = ws;
     return () => {
+      cancelled = true;
       ws.close();
       wsRef.current = null;
     };
@@ -109,6 +200,34 @@ export function SessionPage() {
         method: "POST",
         body: { text },
       }),
+    // FASE UX.2: eco local. Al enviar, añadimos inmediatamente un bubble
+    // "user" con el texto para que el usuario vea su mensaje sin esperar
+    // a que el WS lo confirme. El WS después puede traer un evento user
+    // duplicado — el dedup por seq lo maneja (y como el eco usa un turnId
+    // sintético sin seq, no choca con el user del WS).
+    onMutate: (text) => {
+      const turnId = `local-${Date.now()}`;
+      const stub: RawEventMessage = {
+        seq: -Date.now(), // seq negativo = eco local (no choca con seq reales)
+        type: "user",
+        payload: { text },
+        ui_event: {
+          v: 1,
+          seq: -1,
+          session_id: sid,
+          ts: new Date().toISOString(),
+          kind: "user",
+          payload: { text, from_user: true },
+        },
+        ts: new Date().toISOString(),
+      };
+      setBubbles((prev) => ingestEvent(prev, stub, turnId));
+      // Auto-scroll al fondo al añadir.
+      setTimeout(() => {
+        const el = scrollerRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, 0);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["session", sid] }),
   });
   const stopMut = useMutation({

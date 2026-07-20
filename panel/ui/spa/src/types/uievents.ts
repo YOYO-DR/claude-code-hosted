@@ -15,6 +15,7 @@ export type UIEventKind =
   | "run_result"
   | "session_status"
   | "git_branch"
+  | "user"
   | "error";
 
 export interface UIEventBase {
@@ -29,6 +30,10 @@ export interface UIEventBase {
 export interface AgentTextPayload {
   text: string;
   streaming?: boolean;
+  from_user?: boolean;
+}
+export interface UserTextPayload {
+  text: string;
   from_user?: boolean;
 }
 export interface AgentThinkingPayload {
