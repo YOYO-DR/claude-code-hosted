@@ -67,6 +67,75 @@ ambos (crudo + normalizado), golden tests con fixtures del VPS.
 
 ---
 
+## FASE B — Contrato UIEvent v1 ✅
+
+> **Estado**: ✅ cerrada y desplegada. Commit `3eb0189` en `main`.
+
+### Cambio
+
+El chat actual vuelca el evento crudo del CLI (`[994] result: {...}`,
+`system.thinking_tokens: {...}`). OpenHands se ve bien porque clasifica
+cada evento y lo renderiza con un componente distinto. Esa clasificación
+la hace el **backend** con un normalizador (`UIEvent` v1 discriminated
+union por `kind`); el front consume el contrato estable y decide la
+tarjeta visual.
+
+### Kinds (10)
+
+`agent_text`, `agent_thinking`, `tool_call`, `tool_result`,
+`permission_request`, `permission_resolved`, `run_result`,
+`session_status`, `git_branch`, `error`.
+
+### Cambios
+
+- `panel/core/events/normalize.py`: dataclass `UIEvent` v1 + dispatcher
+  principal por tipo de SDK + `StreamAccumulator` para acumular deltas
+  de streaming (efecto "escribiendo…"). Mensaje desconocido degrada a
+  `kind=error` sin crashear.
+- `panel/core/services/serialize.py`: soporta `StreamEvent` (inner_type
+  + event completo en payload para auditoría).
+- `panel/core/models.py` + `migrations/0006_event_ui_event.py`:
+  `Event.ui_event` JSONField nullable (DUAL_WRITE).
+- `panel/core/services/events.py`: `persist_event(..., ui_event=...)`;
+  `publish_event` lo incluye en el JSON del pubsub.
+- `workers/session_worker.py`: `include_partial_messages=True` en
+  `ClaudeAgentOptions`; `_emit` normaliza los mensajes macro
+  (AssistantMessage/UserMessage/SystemMessage/ResultMessage) →
+  UIEvent persistido. `StreamEvent` crudo persiste y sus deltas
+  se publican SOLO por Redis como UIEvent efímeros (efecto en vivo
+  sin saturar la BD).
+- `tests/fixtures/normalize_v1.json` (11 eventos crudos sintéticos) +
+  `normalize_v1_golden.json` (5 UIEvent macro + 3 deltas) como
+  baseline reproducible.
+- `tests/unit/test_normalize.py`: 17 tests — 1 golden + 16 cobertura
+  (init/thinking_tokens, text/thinking/tool_use con y sin permission
+  pending, tool_result con string/list content, stream accumulator
+  con deltas/stop/unknown, defensa ante entradas malformadas).
+
+### Validación E2E en VPS
+
+Turno real `ls /srv/projects/plantilla-django-react` contra
+MiniMax-M3: **92 eventos crudos, 9 con UIEvent poblado**.
+
+| Kind | Eventos |
+|------|---------|
+| `session_status` | 3 (init + 2 status) |
+| `agent_text` | 1 |
+| `agent_thinking` | 2 |
+| `tool_call` | 1 |
+| `tool_result` | 1 |
+| `run_result` | 1 |
+
+- `system.thinking_tokens` (26 eventos) correctamente NO emite UIEvent.
+- `session_status init` real trae `model=MiniMax-M3`, 60 tools, cwd correcto.
+
+### Tests
+
+- ✅ 151/151 verde (134 previos + 17 nuevos). ruff + mypy limpios.
+- ✅ 17/17 verde en VPS.
+
+---
+
 ## D13 — Warning si el PAT no tiene push sobre el repo del proyecto
 
 > **Estado**: ✅ cerrada y desplegada. Commit `0efb4c0` en `main`.

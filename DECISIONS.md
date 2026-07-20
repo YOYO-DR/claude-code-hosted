@@ -326,3 +326,81 @@ Dos defectos encadenados:
 - `apply_answer` y `expire_pending` ya son idempotentes — no se
   reescriben, solo se invoca el patrón desde la vista también.
 - El worker sigue leyendo la clave Redis (cambio invisible para él).
+
+---
+
+## D14 — UIEvent v1 normalizado en backend (FASE B)
+
+### Contexto
+
+El chat del panel vuelca el evento crudo del CLI
+(`[994] result: {...}`, `system.thinking_tokens: {...}`) — por eso se ve
+como un log. OpenHands clasifica cada evento y lo renderiza con un
+componente distinto. Hacer eso en el backend con un normalizador
+estable (no en el front) da un discriminated union consumible por
+cualquier front futuro.
+
+### Contrato UIEvent v1
+
+10 kinds: `agent_text`, `agent_thinking`, `tool_call`, `tool_result`,
+`permission_request`, `permission_resolved`, `run_result`,
+`session_status`, `git_branch`, `error`. Versión `v: 1` en el JSON para
+poder evolucionar sin romper.
+
+### Persistencia dual
+
+- `Event.payload` sigue con el evento crudo (auditoría/replay).
+- `Event.ui_event` (JSONField nullable, migración 0006) lleva el
+  UIEvent normalizado para el render rápido. Nullable → los eventos
+  previos al despliegue y los `system.thinking_tokens` (telemetría)
+  quedan en None; el front cae al crudo si es null (backfill nunca
+  rompe la UI).
+
+### Streaming
+
+- `ClaudeAgentOptions(include_partial_messages=True)` activa
+  `StreamEvent` con deltas token-a-token.
+- `StreamAccumulator` por sesión agrupa los deltas por
+  `content_block_index` (los stream_event del SDK lo traen).
+- `agent_text.streaming=true` se publica SOLO por Redis (efímero, no
+  BD) — el cliente lo recibe en vivo y lo descarta cuando llega el
+  bloque macro final (que SÍ persiste el UIEvent `streaming=false`).
+- El acumulado vive en memoria del worker. Si muere a mitad de un
+  stream, el siguiente `AssistantMessage` macro trae el texto
+  completo — sin pérdida visible al usuario.
+
+### SDK 0.2.122 (validado en VPS)
+
+Tipos confirmados: `AssistantMessage`, `UserMessage`, `SystemMessage`,
+`ResultMessage`, `StreamEvent`. Bloques: `TextBlock`, `ThinkingBlock`,
+`ToolUseBlock`, `ToolResultBlock`. La firma `ClaudeAgentOptions` con
+todos los campos actuales está documentada en `panel/core/services/
+serialize.py`.
+
+### Defensa ante entradas malformadas
+
+- SDK message desconocido → `kind="error"` con el nombre de la clase.
+- Bloque desconocido dentro de AssistantMessage → degrada a
+  `tool_call` genérico (`generic: true`).
+- `tool_result.content` como lista de dicts → se aplana a string si
+  todos son `{type: text}`, si no se devuelve la lista.
+
+### Compatibilidad
+
+- Cero cambios en el contrato del consumer WS existente (`seq`,
+  `type`, `payload`, `ts` siguen igual; `ui_event` es campo
+  adicional).
+- Cero cambios en la cola de aprobaciones.
+- Regresión 134→151 tests verde. ruff + mypy limpios.
+
+### Cómo regenerar el golden
+
+Si cambias el contrato UIEvent deliberadamente:
+
+```python
+python3 /tmp/gen_golden.py  # lee tests/fixtures/normalize_v1.json,
+                            # aplica el normalizer, escribe
+                            # normalize_v1_golden.json
+```
+
+NO a mano — el diff debe revisarse en el PR.
