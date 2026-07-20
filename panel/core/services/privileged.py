@@ -20,12 +20,55 @@ PROVISION_HELPER = "/opt/panel/deploy/panel-provision.sh"
 CLONE_HELPER = "/opt/panel/deploy/panel-clone.sh"
 
 
+class ProvisioningError(RuntimeError):
+    """Fallo del provisioning clonado desde GitHub (D12). Distinguible del
+    `CalledProcessError` genérico: lleva `repo`, `branch`, `stderr` y `code`
+    para que la vista pueda devolver un mensaje útil al operador (en vez de
+    propagar la excepción como 502)."""
+
+    def __init__(self, message: str, *, repo: str = "", branch: str = "",
+                 stderr: str = "", code: int = 0) -> None:
+        super().__init__(message)
+        self.repo = repo
+        self.branch = branch
+        self.stderr = stderr
+        self.code = code
+
+
 def _is_root() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 def _can_sudo(helper: str) -> bool:
     return shutil.which("sudo") is not None and os.path.exists(helper)
+
+
+def _friendly_clone_message(stderr: str) -> str:
+    """Traduce el stderr de git a un mensaje actionable para el operador."""
+    s = (stderr or "").lower()
+    if "could not read username" in s or "terminal prompts disabled" in s:
+        return (
+            "GitHub no autenticó el clone: el token del panel no tiene acceso "
+            "al repositorio (o el token no está configurado). Pega un PAT con "
+            "scope `repo` en /github/ y vuelve a intentarlo."
+        )
+    if "remote: repository not found" in s or "not found" in s:
+        return (
+            "GitHub devolvió 404: el repositorio no existe, es privado y tu "
+            "PAT no tiene acceso, o el nombre está mal escrito. Verifica en "
+            "https://github.com/<owner>/<repo>."
+        )
+    # 403 genérico de git cuando GitHub deniega (incluye "Write access to
+    # repository not granted" + "The requested URL returned error: 403").
+    if "403" in s or "permission denied" in s or "write access to repository" in s:
+        return (
+            "GitHub denegó el acceso (403): tu PAT no tiene permisos sobre "
+            "este repositorio. Regenera el token con scope `repo` sobre el "
+            "repo correcto y pégalo en /github/."
+        )
+    if "could not resolve host" in s or "network is unreachable" in s:
+        return "Sin red: no se pudo contactar github.com. Revisa DNS/red."
+    return (stderr or "git clone falló sin stderr").strip().splitlines()[-1][:300]
 
 
 def run_render() -> None:
@@ -69,12 +112,24 @@ def remove_agents_md(path: str) -> None:
 
 def run_clone(path: str, repo: str, branch: str, token: str) -> None:
     """Clona `repo` en `path`, crea `branch`, chownea a agents y renderiza. El
-    token va por STDIN (nunca argv/disco)."""
+    token va por STDIN (nunca argv/disco).
+
+    Si el clone falla (red, 403, 404), levanta `ProvisioningError` con el
+    mensaje legible (D12). La vista captura esta excepción y la traduce a 400
+    con rollback del proyecto a medias.
+    """
     if not _is_root() and _can_sudo(CLONE_HELPER):
-        subprocess.run(
+        proc = subprocess.run(
             ["sudo", "-n", CLONE_HELPER, path, repo, branch],
-            input=token + "\n", text=True, check=True,
+            input=token + "\n", text=True,
+            capture_output=True,
         )
+        if proc.returncode != 0:
+            raise ProvisioningError(
+                _friendly_clone_message(proc.stderr),
+                repo=repo, branch=branch,
+                stderr=proc.stderr, code=proc.returncode,
+            )
         return
     _clone_inprocess(path, repo, branch, token)
 

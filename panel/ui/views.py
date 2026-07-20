@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 
 import redis
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, JsonResponse
@@ -90,9 +92,22 @@ def session_detail(request, sid):
 @login_required
 @require_POST
 def session_start(request, slug):
+    """Arranca una sesión. Si el path del proyecto no existe (D12 — caso típico:
+    el clone inicial falló y la fila quedó con path inválido, o el operador
+    borró el dir a mano), NO crea una sesión zombie: redirige a la lista con
+    un mensaje claro."""
     if not request.user.is_verified():
         return HttpResponse(status=403)
     project = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    if not os.path.isdir(project.path):
+        messages.error(
+            request,
+            f"No se puede arrancar la sesión: el path del proyecto "
+            f"({project.path}) no existe. Probablemente el clone inicial "
+            f"falló. Verifica el acceso al repo en /github/ y archiva "
+            f"este proyecto para limpiarlo.",
+        )
+        return redirect("session_list")
     session = session_svc.start_session(project)
     return redirect("session_detail", sid=session.id)
 
@@ -110,7 +125,13 @@ def session_stop(request, sid):
 @login_required
 def project_create(request):
     """Form de creación. Al guardar exitosamente, provisiona (clone/init +
-    AGENTS.md) y redirige a la lista de sesiones."""
+    AGENTS.md) y redirige a la lista de sesiones.
+
+    Si el provisioning falla con `ProvisioningError` (D12 — el caso típico es
+    que el PAT de GitHub no tenga acceso al repo), hace rollback del proyecto
+    y devuelve 400 con el mensaje legible. NO se devuelve 502 (eso era un bug:
+    el operador no podía distinguir "falló el clone" de "panel caído").
+    """
     if not request.user.is_verified():
         return redirect("login")
     if request.method == "POST":
@@ -119,19 +140,44 @@ def project_create(request):
             project = form.save()
             try:
                 prov_svc.provision_project(project)
-            except Exception as exc:
-                # Si el provisioning falla (clone sin red, etc.) el Project ya
-                # está creado; dejamos que el operador reintente desde admin.
+            except privileged.ProvisioningError as exc:
+                # Rollback: borramos la fila a medias + intentamos limpiar
+                # cualquier residuo en /srv/projects (idempotente).
+                Project.objects.filter(pk=project.pk).delete()
+                _safe_cleanup_failed_clone(project.path)
                 return render(
                     request,
                     "ui/project_form.html",
-                    {"form": form, "error": f"guardado OK pero provisioning falló: {exc}"},
-                    status=502,
+                    {"form": form, "error": str(exc)},
+                    status=400,
+                )
+            except Exception as exc:  # noqa: BLE001 — defensa de último recurso
+                Project.objects.filter(pk=project.pk).delete()
+                _safe_cleanup_failed_clone(project.path)
+                return render(
+                    request,
+                    "ui/project_form.html",
+                    {"form": form, "error": f"provisioning falló: {exc}"},
+                    status=400,
                 )
             return redirect("session_list")
     else:
         form = ProjectForm()
     return render(request, "ui/project_form.html", {"form": form})
+
+
+def _safe_cleanup_failed_clone(path: str) -> None:
+    """Borra el dir del proyecto si existe y quedó vacío/con contenido parcial.
+    Se ejecuta como `panel` (sin root); si el helper de sudo lo creó con
+    permisos de root no podemos borrarlo desde aquí — en ese caso dejamos que
+    el operador lo limpie con sudo desde admin. No falla."""
+    import shutil
+
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
 
 
 @login_required
