@@ -436,23 +436,24 @@ def _serve_spa_index():
     return HttpResponse(html, content_type="text/html")
 
 
-@login_required
 def index_spa_or_legacy(request):
-    """`/` → SPA si está construido; si no, el template legacy de sesiones.
+    """`/` → SPA si está construido; si no, el template legacy.
 
-    Si no hay sesión autenticada + TOTP verificada, redirige a /login/
-    (el SPA también lo hace client-side, pero la vista legacy debe
-    mantener el comportamiento del checklist 0).
+    No exigimos login aquí: el SPA decide qué mostrar (página de login
+    si no hay sesión, /sessions si la hay). Solo si el SPA no está
+    construido, exigimos auth para mantener el comportamiento del
+    checklist 0.
     """
     spa = _serve_spa_index()
     if spa is not None:
         return spa
-    # Fallback al listado de sesiones legacy.
+    # Fallback al listado de sesiones legacy — exige auth.
+    if not request.user.is_authenticated or not request.user.is_verified():
+        return redirect("login")
     sessions = Session.objects.select_related("project").order_by("-created_at")[:200]
     return render(request, "ui/session_list.html", {"sessions": sessions})
 
 
-@login_required
 def spa_catch_all(request, spa_path: str):
     """Catch-all: cualquier ruta no manejada por Django → SPA index.
 
