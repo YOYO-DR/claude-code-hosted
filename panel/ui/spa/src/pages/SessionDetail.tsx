@@ -461,6 +461,13 @@ function BubbleView({
           {p.dirty ? <span style={{ color: "var(--err-fg)" }}> ● dirty</span> : null}
         </div>
       );
+    case "user":
+      return (
+        <div className="bubble user">
+          <span style={{ opacity: 0.6, fontSize: "0.85em" }}>tú:</span>{" "}
+          <span>{String(p.text ?? "")}</span>
+        </div>
+      );
     case "error":
       return (
         <div className="bubble error">{String(p.message ?? "error")}</div>
