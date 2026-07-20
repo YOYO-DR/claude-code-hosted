@@ -67,6 +67,57 @@ ambos (crudo + normalizado), golden tests con fixtures del VPS.
 
 ---
 
+## FASE A.5 — Bug 502 al fallar clone + sesión zombie
+
+> **Estado**: ✅ cerrada y desplegada en VPS. Commit `f514814` en `main`.
+
+### Bug
+
+`POST /projects/new/` con un repo al que el PAT no tiene acceso devolvía
+**502** (propagaba `CalledProcessError`). El proyecto quedaba en DB con
+`path` inexistente, y al hacer `POST /projects/<slug>/start/` se creaba
+una **sesión zombie** que arrancaba el worker sobre un path vacío
+(bucle infinito de errores).
+
+### Fix (D12)
+
+- `privileged.ProvisioningError(message, repo=, branch=, stderr=, code=)`
+  con `_friendly_clone_message()` que traduce stderr de git a mensaje
+  legible: 403 (permisos), 404 (no existe), network (sin DNS/red).
+- `project_create`: captura `ProvisioningError` → **400** con mensaje,
+  rollback del `Project` a medias + `rmtree` best-effort del path.
+  Cualquier otra excepción también 400 (defensa de último recurso).
+- `session_start`: si `os.path.isdir(project.path)` es False, redirige
+  a `/sessions/` con `messages.error` y **NO** crea Session.
+- Sesión zombie `6a8626eb-…` detenida y marcada `crashed`; proyecto
+  `mciv-ocr` archivado manualmente.
+
+### Tests
+
+- ✅ 6 nuevos en `tests/unit/test_provisioning.py`:
+  - `test_friendly_clone_message_403`
+  - `test_friendly_clone_message_404`
+  - `test_friendly_clone_message_no_network`
+  - `test_run_clone_raises_ProvisioningError_on_subprocess_failure`
+  - `test_start_session_blocked_when_path_missing`
+  - `test_create_project_clone_failure_returns_400_and_rolls_back`
+- ✅ Regresión completa: **128/128 verde** en local; en VPS los 6 nuevos
+  verde (los 5 fallos restantes son tests previos de provisioning que
+  requieren `/srv/projects/*` para sudoers y solo corren en local con
+  `_provision_inprocess`).
+- ✅ `ruff` + `mypy` limpios.
+
+### Validación E2E en VPS
+
+| Ítem | Resultado |
+|------|-----------|
+| Código desplegado con `install.sh --update` | ✅ `HEAD=f514814` |
+| Tests D12 verde en VPS | ✅ 6/6 |
+| Sesión zombie detenida | ✅ `systemctl stop claude-session@6a8626eb-…` + DB `crashed` |
+| Proyecto huérfano limpiado | ✅ `mciv-ocr` borrado de DB |
+
+---
+
 ## FASE C — SPA React + chat + panel lateral (pendiente)
 
 Tras B. Decisiones tomadas en §1: **TanStack Router**, ttyd como URL directa.
