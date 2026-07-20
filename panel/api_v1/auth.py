@@ -106,7 +106,13 @@ def login_view(request: HttpRequest) -> JsonResponse:
             return JsonResponse({"ok": False, "error": "código TOTP inválido"}, status=401)
         otp_login(request, device)
 
-    return JsonResponse({"ok": True, "user": _user_payload(user), "next": next_url})
+    # Tras otp_login(), la sesión SÍ está verificada — leemos de request.user
+    # (que es lo que mira el OTPMiddleware). El user original tenía is_verified
+    # a False (django_otp solo inyecta is_verified() tras verificar el device
+    # contra la sesión actual; el atributo del modelo User nunca cambia).
+    return JsonResponse(
+        {"ok": True, "user": _user_payload(request.user), "next": next_url}
+    )
 
 
 @csrf_exempt
