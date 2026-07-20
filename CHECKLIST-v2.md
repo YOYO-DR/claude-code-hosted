@@ -247,6 +247,65 @@ Tras B. Decisiones tomadas en §1: **TanStack Router**, ttyd como URL directa.
 
 ---
 
+## FASE C — SPA React ✅ (versión inicial desplegada)
+
+> **Estado**: ✅ cerrada y desplegada. Commits `16d902e`, `1f32c6e`, `9274044`,
+> `e281851`, `31e2619` en `main`.
+
+### Lo que está en producción
+
+- **Frontend SPA** (`panel/ui/spa/dist/` commiteado, sin node en VPS):
+  - Vite 6 + React 19 + TypeScript estricto + TanStack Router/Query
+  - Auth por cookie de sesión Django + CSRF (no JWT)
+  - Cliente WS con reconexión + `last_seq` + `SeqDedup` cliente
+  - Tipos UIEvent v1 sincronizados con backend
+  - Vista Sesión estilo OpenHands con discriminated union por kind
+  - Build: 328 kB / 103 kB gzip
+- **Backend API v1** (`/api/v1/`) — 14 endpoints JSON con
+  decorador `@require_verified_json`:
+  - me/login/logout, sessions (CRUD), projects (list + tree/file/diff)
+  - mcps, github, permissions
+  - Path traversal tests OBLIGATORIOS: 4 vectores cubiertos (parent,
+    absolute, dotdot-inside, symlink-escape) — todos 403
+- **Worker git_branch watcher** (FASE C.6):
+  - Filtra Edit/Write/MultiEdit/NotebookEdit/Bash con "git"
+  - Polling barato (`git rev-parse` + `git status --porcelain`)
+  - Cache `_last_git_state` para no emitir duplicados
+  - UIEvent efímero por Redis (no BD)
+- **Vistas Django** (`panel/ui/views.py`):
+  - `index_spa_or_legacy`: ` / ` sirve `dist/index.html` si existe,
+    si no fallback al template legacy con auth requerida.
+  - `spa_catch_all`: `<path:spa_path>` → sirve assets de dist/ o
+    `index.html` para que React Router resuelva.
+  - Ninguna exige auth (el SPA decide qué mostrar).
+- **Deploy** (`deploy/install.sh --update`):
+  - Pull → uv sync → verificar dist/ → migrate → collectstatic → restart
+  - No requiere node/pnpm/npm en el VPS.
+
+### Validación E2E en VPS
+
+| Ítem | Resultado |
+|------|-----------|
+| `GET /` sirve SPA | ✅ HTTP 200, 1249 bytes, `<title>Claude Code · Panel</title>` |
+| `/assets/index-*.js` servido | ✅ (testeado vía SPA) |
+| `GET /api/v1/me/` sin sesión | ✅ HTTP 401, `{"detail": "unauthenticated"}` |
+| Migraciones aplicadas | ✅ core.0005, 0006 ya en BD |
+| `dist/index.html` presente en VPS | ✅ `Jul 20 06:24` |
+| Panel ASGI arriba | ✅ `panel.service: active` |
+
+### Pendiente (no bloqueante para cerrar FASE C)
+
+- Paridad 1:1 con templates legacy: Proyectos CRUD, MCPs CRUD, Aprobaciones
+  vista global (placeholder por ahora en `pages/Projects.tsx` etc.).
+- E2E con Playwright: validar chat en vivo con sesión real.
+
+### Tests
+
+- ✅ 179/179 verde (151 FASE B + 21 api_v1 + 7 watcher)
+- ✅ ruff + mypy limpios
+
+---
+
 ## FASE D — Administración de modelos (pendiente)
 
 Tras C.
