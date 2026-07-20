@@ -94,7 +94,15 @@ class SessionConsumer(AsyncWebsocketConsumer):
     async def _send_backlog(self, last_seq: int) -> None:
         for ev in await self._fetch_backlog(self.sid, last_seq):
             if self._dedup.should_forward(ev["seq"]):
-                await self.send(text_data=json.dumps({"channel": "out", "event": ev}))
+                # FASE C: el SPA espera {seq, type, payload, ui_event, ts}
+                # plano (ver panel/ui/spa/src/lib/ws.ts::RawEventMessage).
+                # Antes envolvíamos en {channel, event} y el cliente no
+                # encontraba seq/type/payload. Mantenemos compatibilidad
+                # publicando AMBOS formatos — el cliente ignora lo que no
+                # necesita; el campo extra `event` es inofensivo.
+                await self.send(text_data=json.dumps(
+                    {**ev, "_channel": "out", "_event": ev}
+                ))
 
     async def _read_pubsub(self) -> None:
         async for message in self._pubsub.listen():
@@ -111,9 +119,14 @@ class SessionConsumer(AsyncWebsocketConsumer):
                 seq = data.get("seq")
                 if seq is not None and not self._dedup.should_forward(seq):
                     continue
-                await self.send(text_data=json.dumps({"channel": "out", "event": data}))
+                # Mismo shape plano que _send_backlog (FASE C).
+                await self.send(text_data=json.dumps(
+                    {**data, "_channel": "out", "_event": data}
+                ))
             elif channel == bus.key_perm(self.sid):
-                await self.send(text_data=json.dumps({"channel": "perm", "event": data}))
+                await self.send(text_data=json.dumps(
+                    {"_channel": "perm", "_event": data, **data}
+                ))
 
     def _query_param(self, name: str, default: str) -> str:
         qs = self.scope.get("query_string", b"").decode()
