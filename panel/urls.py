@@ -1,10 +1,11 @@
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
 from panel.ui import views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/v1/", include("panel.api_v1.urls")),
     path("", views.session_list, name="session_list"),
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
