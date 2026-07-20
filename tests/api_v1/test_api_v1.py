@@ -382,3 +382,200 @@ def test_mcps_list_returns_servers(tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert any(m["name"] == "ports" for m in data)
+
+# ---------- FASE D: API REST de ModelProfile ----------
+
+def _make_model(name="test-model", provider="anthropic", model_name="claude-3-5-sonnet-20241022",
+               base_url=None, token=None, **extra):
+    p = ModelProfile.objects.create(
+        name=name, provider=provider, model=model_name, base_url=base_url, **extra,
+    )
+    if token:
+        from panel.core.services import models as model_svc
+        model_svc.store_token(p, token)
+        p.save(update_fields=["auth_token_enc", "updated_at"])
+    return p
+
+
+
+
+# ---------- FASE D: API REST de ModelProfile ----------
+
+def _make_model(name="test-model", provider="anthropic", model_name="claude-3-5-sonnet-20241022",
+               base_url=None, token=None, **extra):
+    p = ModelProfile.objects.create(
+        name=name, provider=provider, model=model_name, base_url=base_url, **extra,
+    )
+    if token:
+        from panel.core.services import models as model_svc
+        model_svc.store_token(p, token)
+        p.save(update_fields=["auth_token_enc", "updated_at"])
+    return p
+
+
+def test_models_list_returns_profiles():
+    _make_model(name="m1")
+    _make_model(name="m2", provider="minimax", model_name="MiniMax-M3")
+    c = _client_verified()
+    r = c.get("/api/v1/models/")
+    assert r.status_code == 200
+    data = r.json()
+    names = {m["name"] for m in data}
+    assert {"m1", "m2"} <= names
+
+
+def test_model_create_with_token_does_not_echo_token():
+    """POST con auth_token: el token NO debe volver en la respuesta, ni
+    siquiera cifrado (es write-only)."""
+    c = _client_verified()
+    token = "sk-secret-TOKEN-FAKE-12345"
+    r = c.post(
+        "/api/v1/models/create/",
+        data=json.dumps({
+            "name": "anthropic-prod",
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet-20241022",
+            "base_url": "https://api.anthropic.com",
+            "auth_token": token,
+        }),
+        content_type="application/json",
+    )
+    assert r.status_code == 201
+    body = r.json()
+    # El token NO debe aparecer en NINGÚN campo de la respuesta.
+    assert "auth_token" not in body
+    assert "auth_token_enc" not in body
+    # has_token=True indica que SÍ se guardó (pero no el valor).
+    assert body["has_token"] is True
+    # Y un grep exhaustivo sobre el JSON.
+    raw = r.content.decode()
+    assert "sk-secret-TOKEN-FAKE" not in raw, (
+        f"Token filtrado en la respuesta POST create:\n{raw}"
+    )
+    # Verificamos que el token se guardó (consultando BD).
+    p = ModelProfile.objects.get(name="anthropic-prod")
+    from panel.core.services import models as model_svc
+    assert model_svc.get_token(p) == token
+
+
+def test_model_list_does_not_include_token():
+    """GET /api/v1/models/ NUNCA devuelve auth_token ni auth_token_enc."""
+    _make_model(name="with-tok", token="sk-SECRET-FAKE-99999")
+    c = _client_verified()
+    r = c.get("/api/v1/models/")
+    raw = r.content.decode()
+    assert "sk-SECRET-FAKE" not in raw, (
+        f"Token filtrado en GET /api/v1/models/:\n{raw}"
+    )
+    for m in r.json():
+        assert "auth_token" not in m
+        assert "auth_token_enc" not in m
+        assert m["has_token"] is True  # pero sí indica que hay
+
+
+def test_model_update_can_replace_token():
+    """PATCH con auth_token nuevo → reemplaza el cifrado."""
+    _make_model(name="upd", token="sk-OLD")
+    c = _client_verified()
+    p = ModelProfile.objects.get(name="upd")
+    pid = p.id
+    r = c.generic(method="PATCH", path=f"/api/v1/models/{pid}/update/",
+                  data=json.dumps({"auth_token": "sk-NEW"}),
+                  content_type="application/json")
+    assert r.status_code == 200
+    raw = r.content.decode()
+    assert "sk-OLD" not in raw
+    assert "sk-NEW" not in raw
+    from panel.core.services import models as model_svc
+    p2 = ModelProfile.objects.get(name="upd")
+    assert model_svc.get_token(p2) == "sk-NEW"
+
+
+def test_model_update_can_clear_token():
+    """PATCH con auth_token='' → borra el cifrado."""
+    _make_model(name="clr", token="sk-SECRET-AAA")
+    c = _client_verified()
+    p = ModelProfile.objects.get(name="clr")
+    r = c.generic(method="PATCH", path=f"/api/v1/models/{p.id}/update/",
+                  data=json.dumps({"auth_token": ""}),
+                  content_type="application/json")
+    assert r.status_code == 200
+    p2 = ModelProfile.objects.get(name="clr")
+    from panel.core.services import models as model_svc
+    assert model_svc.get_token(p2) is None
+    assert p2.auth_token_enc is None or len(p2.auth_token_enc) == 0
+
+
+def test_model_test_does_not_echo_token():
+    """POST /test/ → ping al base_url con el token en Authorization. La
+    respuesta NUNCA debe incluir el token, ni siquiera en stderr."""
+    _make_model(name="ping", base_url="http://127.0.0.1:1/", token="sk-SECRET-XXX")
+    c = _client_verified()
+    p = ModelProfile.objects.get(name="ping")
+    r = c.post(f"/api/v1/models/{p.id}/test/")
+    raw = r.content.decode()
+    assert "sk-SECRET-XXX" not in raw
+    assert r.status_code == 200
+
+
+def test_model_delete_blocked_if_used_by_project(tmp_path):
+    """No se puede borrar un ModelProfile que esté en uso."""
+    p = _make_model(name="used")
+    proj = _project("uses-it", tmp_path)
+    proj.model_profile = p
+    proj.save(update_fields=["model_profile", "updated_at"])
+    c = _client_verified()
+    r = c.generic(method="DELETE", path=f"/api/v1/models/{p.id}/delete/")
+    assert r.status_code == 409
+
+
+def test_model_delete_succeeds_if_unused():
+    p = _make_model(name="orphan")
+    c = _client_verified()
+    r = c.generic(method="DELETE", path=f"/api/v1/models/{p.id}/delete/")
+    assert r.status_code == 200
+    assert not ModelProfile.objects.filter(name="orphan").exists()
+
+
+def test_set_project_model_changes_model(tmp_path):
+    old = _make_model(name="old-mp")
+    new = _make_model(name="new-mp")
+    proj = _project("switcher", tmp_path)
+    proj.model_profile = old
+    proj.save(update_fields=["model_profile", "updated_at"])
+    c = _client_verified()
+    r = c.post(
+        f"/api/v1/projects/{proj.slug}/model/",
+        data=json.dumps({"model_profile_id": new.id}),
+        content_type="application/json",
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["old_model_profile"] == old.id
+    assert body["new_model_profile"] == new.id
+    assert body["needs_restart"] is True
+    proj.refresh_from_db()
+    assert proj.model_profile_id == new.id
+
+
+def test_grep_token_does_not_appear_anywhere():
+    """Test 'grep exhaustivo': crear un perfil con un token único, hacer
+    GET/POST/PATCH/DELETE/test y verificar que el token NUNCA aparece
+    en ninguna respuesta (como en FASE B del GitHub)."""
+    secret = "sk-GREP-EXHAUSTIVE-FASE-D-12345"
+    _make_model(name="grep-mp", base_url="http://127.0.0.1:1/", token=secret)
+    c = _client_verified()
+    p = ModelProfile.objects.get(name="grep-mp")
+    pid = p.id
+
+    # GET list
+    r = c.get("/api/v1/models/")
+    assert secret not in r.content.decode()
+    # POST test
+    r = c.post(f"/api/v1/models/{pid}/test/")
+    assert secret not in r.content.decode()
+    # PATCH update (sin auth_token, solo name)
+    r = c.generic(method="PATCH", path=f"/api/v1/models/{pid}/update/",
+                  data=json.dumps({"name": "grep-mp2"}),
+                  content_type="application/json")
+    assert secret not in r.content.decode()

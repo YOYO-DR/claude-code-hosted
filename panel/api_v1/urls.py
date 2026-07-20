@@ -2,7 +2,7 @@
 
 from django.urls import path
 
-from . import auth, github, mcps, permissions, projects, sessions
+from . import auth, github, mcps, models, permissions, projects, sessions
 
 urlpatterns = [
     # Auth
@@ -21,10 +21,17 @@ urlpatterns = [
     path("projects/<slug:slug>/tree/", projects.project_tree, name="api_v1_project_tree"),
     path("projects/<slug:slug>/file/", projects.project_file, name="api_v1_project_file"),
     path("projects/<slug:slug>/diff/", projects.project_diff, name="api_v1_project_diff"),
+    path("projects/<slug:slug>/model/", models.set_project_model, name="api_v1_set_project_model"),
     # MCPs
     path("mcps/", mcps.list_mcps, name="api_v1_mcps"),
     # GitHub
     path("github/", github.github_info, name="api_v1_github_info"),
+    # ModelProfiles (FASE D)
+    path("models/", models.list_models, name="api_v1_models"),
+    path("models/create/", models.create_model, name="api_v1_model_create"),
+    path("models/<int:pk>/update/", models.update_model, name="api_v1_model_update"),
+    path("models/<int:pk>/delete/", models.delete_model, name="api_v1_model_delete"),
+    path("models/<int:pk>/test/", models.test_model, name="api_v1_model_test"),
     # Permissions
     path("permissions/", permissions.list_permissions, name="api_v1_permissions"),
     path(

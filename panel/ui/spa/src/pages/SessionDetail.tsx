@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
 import type { UIEvent, UIEventKind } from "@/types/uievents";
 import { ProjectTree, ProjectDiff } from "@/components/ProjectTree";
@@ -144,8 +144,9 @@ export function SessionPage() {
       <h1>
         Sesión <span style={{ color: "var(--muted)", fontSize: "0.7em" }}>{sid.slice(0, 8)}</span>
       </h1>
-      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "0.6rem" }}>
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "0.6rem", alignItems: "center" }}>
         <span>Proyecto: <strong>{sess.project}</strong></span>
+        <ModelSelector slug={sess.project_slug} />
         <span>
           Estado:{" "}
           <span style={{ border: "1px solid var(--border)", padding: "0 0.4rem", borderRadius: 4 }}>
@@ -400,6 +401,110 @@ function RamaTab({ slug }: { slug: string }) {
         El watcher emite eventos <code>git_branch</code> en el chat en vivo
         cuando la rama o el dirty cambia.
       </p>
+    </div>
+  );
+}
+
+
+// ---------- FASE D.2: Selector de modelo en chat ----------
+//
+// Dropdown con los ModelProfile disponibles. Cambiar de modelo:
+// 1. POST /api/v1/projects/<slug>/model/ {model_profile_id} → actualiza BD
+// 2. Devuelve {needs_restart: true} → el banner "Reinicio requerido"
+// 3. El usuario hace click en "Reiniciar" → POST /sessions/<id>/stop/
+//    y luego navega a /projects/<slug>/start/ (legacy POST) que crea
+//    nueva sesión con el nuevo modelo.
+//
+// En el MVP el "Reiniciar" navega a /projects/<slug>/ — la vista de
+// proyectos (legacy) tiene el botón Start que crea la nueva sesión.
+
+interface Model {
+  id: number;
+  name: string;
+  provider: string;
+  model: string;
+  has_token: boolean;
+}
+
+interface Project {
+  slug: string;
+  model_profile: Model;
+  model_profile_id: number;
+}
+
+function ModelSelector({ slug }: { slug: string }) {
+  const modelsQ = useQuery({
+    queryKey: ["models"],
+    queryFn: () => api<Model[]>("/api/v1/models/"),
+  });
+  const projectQ = useQuery({
+    queryKey: ["project", slug],
+    queryFn: () => api<Project>(`/api/v1/projects/${slug}/`),
+  });
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const changeMut = useMutation({
+    mutationFn: (modelProfileId: number) =>
+      api<{ ok: boolean; old_model_profile: number; new_model_profile: number; needs_restart: boolean }>(
+        `/api/v1/projects/${slug}/model/`,
+        { method: "POST", body: { model_profile_id: modelProfileId } },
+      ),
+    onSuccess: (data) => {
+      if (data.ok) {
+        if (data.needs_restart) {
+          setMsg({ kind: "ok", text: "Modelo cambiado — reinicia la sesión para aplicar." });
+        } else {
+          setMsg({ kind: "ok", text: "Modelo actualizado." });
+        }
+        void qc.invalidateQueries({ queryKey: ["project", slug] });
+      } else {
+        setMsg({ kind: "err", text: "Error cambiando modelo" });
+      }
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) {
+        const body = (err.body ?? {}) as { error?: string };
+        setMsg({ kind: "err", text: body.error ?? `Error ${err.status}` });
+      } else {
+        setMsg({ kind: "err", text: String(err) });
+      }
+    },
+  });
+
+  if (modelsQ.isLoading || projectQ.isLoading) return <span className="meta">modelo…</span>;
+  if (modelsQ.error || projectQ.error) return null;
+  const models = modelsQ.data ?? [];
+  const project = projectQ.data;
+  if (!project || models.length === 0) return null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+      <label style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+        <span className="meta">modelo:</span>
+        <select
+          value={project.model_profile_id}
+          disabled={changeMut.isPending}
+          onChange={(e) => {
+            const newId = Number(e.target.value);
+            if (newId !== project.model_profile_id) {
+              changeMut.mutate(newId);
+            }
+          }}
+          >
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.provider})
+              {!m.has_token ? " — sin token" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {msg && (
+        <span className={`msg ${msg.kind === "ok" ? "info" : "error"}`} style={{ padding: "0.2rem 0.5rem" }}>
+          {msg.text}
+        </span>
+      )}
     </div>
   );
 }
