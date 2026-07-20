@@ -67,6 +67,60 @@ ambos (crudo + normalizado), golden tests con fixtures del VPS.
 
 ---
 
+## D13 — Warning si el PAT no tiene push sobre el repo del proyecto
+
+> **Estado**: ✅ cerrada y desplegada. Commit `0efb4c0` en `main`.
+
+### Caso
+
+Operador crea un proyecto apuntando a un repo público fuera del scope
+del PAT (fine-grained con `public_access: read`, o classic sin
+`public_repo`). El clone pasa (read-only basta), pero `git push` /
+abrir PR fallan con 403 a mitad del trabajo del agente.
+
+### Decisión del operador
+
+**Solo advertir, no bloquear** (la sesión puede arrancar; el operador
+arregla el token cuando quiera).
+
+### Fix
+
+- `gh.check_push_access(token, repo)` → `(ok, mensaje)` mirando
+  `permissions.push` de `GET /repos/{owner}/{repo}`.
+- `Project.github_warn_no_push` (BooleanField, default False) +
+  migración `0005_project_github_warn_no_push`.
+- `provision_project` invoca `_check_and_flag_push_access()` tras el clone.
+- `session_start` revalida al arrancar (cubre token rotado).
+- `project_create` y `session_start` muestran `messages.warning` cuando
+  el flag está activo.
+- `session_detail.html` muestra banner amarillo persistente mientras el
+  flag esté activo.
+- `base.html` añade bloque de Django messages framework con estilos
+  `.msg.warning/.error/.info`.
+
+### Tests
+
+- ✅ 6 nuevos en `tests/unit/test_provisioning.py`:
+  - `test_check_push_access_true_when_push`
+  - `test_check_push_access_false_when_no_push_public`
+  - `test_check_push_access_false_when_no_push_private`
+  - `test_check_push_access_false_when_repo_404`
+  - `test_check_and_flag_push_access_sets_warning`
+  - `test_check_and_flag_push_access_idempotent_when_ok`
+- ✅ Regresión completa: **134/134 verde** en local y VPS.
+- ✅ `ruff` + `mypy` limpios.
+
+### Validación E2E en VPS
+
+| Ítem | Resultado |
+|------|-----------|
+| Migración `0005` aplicada | ✅ "Applying core.0005_project_github_warn_no_push... OK" |
+| Campo visible en DB | ✅ `Project.objects.all()` muestra `warn_no_push=False` para todos |
+| Helper `check_push_access` con monkey-patch | ✅ Flip-flop False→True→False funciona |
+| Banner persistente en sesión detail | ✅ implementado (verificación visual pendiente en navegador) |
+
+---
+
 ## FASE A.5 — Bug 502 al fallar clone + sesión zombie
 
 > **Estado**: ✅ cerrada y desplegada en VPS. Commit `f514814` en `main`.
