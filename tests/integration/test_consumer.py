@@ -88,10 +88,14 @@ async def test_sends_backlog_and_dedups(monkeypatch, django_user_model):
     assert connected
 
     # Backlog: seq 2 y 3 (seq>1), en orden, sin duplicar.
+    # FASE C: el consumer ahora publica el shape plano (spread del dict
+    # del evento + _channel/_event para compat). El cliente extrae seq del
+    # top-level; "_channel" sigue siendo "out" para identificar el canal.
     seqs = []
     for _ in range(2):
         msg = json.loads(await comm.receive_from())
-        assert msg["channel"] == "out"
-        seqs.append(msg["event"]["seq"])
+        assert msg["_channel"] == "out"
+        assert msg["seq"] == msg["_event"]["seq"]
+        seqs.append(msg["seq"])
     assert seqs == [2, 3]
     await comm.disconnect()
