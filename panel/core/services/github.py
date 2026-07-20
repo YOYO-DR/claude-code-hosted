@@ -105,6 +105,42 @@ def get_repo(token: str, full_name: str) -> dict:
     return _request("GET", f"/repos/{full_name}", token)
 
 
+def check_push_access(token: str, full_name: str) -> tuple[bool, str]:
+    """Devuelve (ok, mensaje) sobre los permisos de push del PAT en el repo.
+
+    D13: el operador puede crear un proyecto apuntando a un repo público
+    fuera del scope del token (fine-grained con `public_access: read` o
+    classic sin `public_repo`). El clone puede pasar (read-only basta) pero
+    `git push`/`create_pull` fallarán con 403. Esta función mira la rama
+    `permissions` de la respuesta de `/repos/{owner}/{repo}` y devuelve:
+      - (True, "ok") si push/pull/admin es True
+      - (False, "<razón legible>") si no hay push o el repo es inalcanzable
+    """
+    try:
+        repo = get_repo(token, full_name)
+    except GitHubError as exc:
+        code = exc.status or 0
+        if code == 404:
+            return False, "GitHub devolvió 404: repo no existe o el PAT no tiene acceso"
+        if code == 403:
+            return False, f"GitHub devolvió 403 al inspeccionar el repo: {exc}"
+        return False, f"no se pudo inspeccionar el repo: {exc}"
+    perms = repo.get("permissions") or {}
+    if perms.get("push") or perms.get("maintain") or perms.get("admin"):
+        return True, "ok"
+    # No push. Razones típicas legibles:
+    if repo.get("private"):
+        return False, (
+            "el PAT no tiene permisos de push sobre este repo privado. "
+            "Regenera el token con acceso a este repo."
+        )
+    return False, (
+        "el PAT no tiene push sobre este repo público (típico: fine-grained "
+        "con solo `public_access: read`, o classic sin scope `public_repo`). "
+        "El clone funcionará pero `git push` y abrir PR fallarán con 403."
+    )
+
+
 def default_branch(token: str, full_name: str) -> str:
     return get_repo(token, full_name).get("default_branch", "main")
 

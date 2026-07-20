@@ -10,6 +10,16 @@
     Conexión <span class="pill" id="ws-state">…</span>
   </p>
 
+  {% if session.project.github_warn_no_push %}
+    <div class="banner-github-warn">
+      ⚠️ El PAT actual <strong>no tiene permisos de push</strong> sobre
+      <code>{{ session.project.github_repo }}</code>. El agente podrá leer y
+      trabajar en local, pero <code>git push</code> y abrir PR fallarán con
+      403 hasta que regeneres el token con scope adecuado en
+      <a href="{% url 'github_settings' %}">/github/</a>.
+    </div>
+  {% endif %}
+
   {% if needs_restart %}
     <p class="pill" style="background:#7a4a00;color:#ffd">
       ⟳ Reinicio requerido — la config de MCP o el modelo cambió desde que arrancó esta sesión.

@@ -71,7 +71,11 @@ def _render_agents_md(project: Project) -> str:
 def provision_project(project: Project) -> None:
     """Provisiona el proyecto: clona desde GitHub (rama agent/<slug>) si tiene
     repo activo y hay token; si no, dir vacío con git init. Crea el topic de
-    Telegram (best-effort) y escribe AGENTS.md. Idempotente."""
+    Telegram (best-effort) y escribe AGENTS.md. Idempotente.
+
+    D13: tras el clone exitoso, valida si el PAT tiene push sobre el repo.
+    Si NO, marca `github_warn_no_push=True` en el proyecto para que la UI
+    muestre un banner persistente (no bloquea: el operador decide)."""
     if project.github_repo and project.github_enabled and github.has_token():
         token = github.get_token()
         if token:
@@ -79,9 +83,27 @@ def provision_project(project: Project) -> None:
             privileged.run_clone(project.path, project.github_repo, branch, token)
             privileged.write_agents_md(project.path, _render_agents_md(project))
             ensure_topic(project)
+            _check_and_flag_push_access(project)
             return
     privileged.run_provision(project.slug, project.path)
     privileged.write_agents_md(project.path, _render_agents_md(project))
+
+
+def _check_and_flag_push_access(project: Project) -> None:
+    """Best-effort: si podemos hablar con GitHub, miramos permissions.push
+    del repo del proyecto y marcamos github_warn_no_push si falta."""
+    if not project.github_repo or not github.has_token():
+        return
+    token = github.get_token()
+    if not token:
+        return
+    try:
+        ok, _ = github.check_push_access(token, project.github_repo)
+    except Exception:  # noqa: BLE001 — red/idempotencia
+        return
+    if project.github_warn_no_push != (not ok):
+        project.github_warn_no_push = not ok
+        project.save(update_fields=["github_warn_no_push", "updated_at"])
     ensure_topic(project)
 
 

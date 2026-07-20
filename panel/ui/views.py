@@ -95,7 +95,8 @@ def session_start(request, slug):
     """Arranca una sesión. Si el path del proyecto no existe (D12 — caso típico:
     el clone inicial falló y la fila quedó con path inválido, o el operador
     borró el dir a mano), NO crea una sesión zombie: redirige a la lista con
-    un mensaje claro."""
+    un mensaje claro. D13: revalida push access antes de arrancar (banner, no
+    bloquea)."""
     if not request.user.is_verified():
         return HttpResponse(status=403)
     project = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
@@ -108,6 +109,19 @@ def session_start(request, slug):
             f"este proyecto para limpiarlo.",
         )
         return redirect("session_list")
+    # D13: revalidar push access (cubre el caso "token rotado desde la
+    # creación"). No bloquea — solo refresca el flag y muestra warning.
+    if project.github_repo and project.github_enabled:
+        prov_svc._check_and_flag_push_access(project)  # noqa: SLF001
+        project.refresh_from_db()
+        if project.github_warn_no_push:
+            messages.warning(
+                request,
+                "Sesión arrancada, pero el PAT actual no tiene push sobre "
+                f"{project.github_repo}. El agente podrá leer pero no "
+                "hacer push ni abrir PR. Regenera el token en /github/ "
+                "si quieres habilitar push.",
+            )
     session = session_svc.start_session(project)
     return redirect("session_detail", sid=session.id)
 
@@ -159,6 +173,16 @@ def project_create(request):
                     "ui/project_form.html",
                     {"form": form, "error": f"provisioning falló: {exc}"},
                     status=400,
+                )
+            # D13: si provision_project detectó falta de push, advertimos (no bloqueamos).
+            project.refresh_from_db()
+            if project.github_warn_no_push:
+                messages.warning(
+                    request,
+                    "Proyecto creado, pero el PAT actual no tiene permisos "
+                    "de push sobre este repo. El clone pasó pero `git push` "
+                    "y abrir PR fallarán hasta que regeneres el token con "
+                    "scope adecuado.",
                 )
             return redirect("session_list")
     else:

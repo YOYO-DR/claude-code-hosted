@@ -25,6 +25,14 @@
     .ev.result { border-color: #3c9; }
     .ev.system { border-color: #a8a; }
     form.inline { display: inline; }
+    .msg { padding: .5rem .8rem; margin: 0 0 .8rem; border-radius: 4px;
+           border: 1px solid #8886; }
+    .msg.warning { background: #fff3cd; color: #664d03; border-color: #ffe69c; }
+    .msg.error   { background: #f8d7da; color: #842029; border-color: #f1aeb5; }
+    .msg.info    { background: #cff4fc; color: #055160; border-color: #b6effb; }
+    .banner-github-warn { background: #fff3cd; color: #664d03;
+                          border: 1px solid #ffe69c; padding: .5rem .8rem;
+                          margin: 0 0 .8rem; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -44,6 +52,13 @@
       {% endif %}
     </span>
   </header>
-  <main>{% block content %}{% endblock %}</main>
+  <main>
+    {% if messages %}
+      {% for message in messages %}
+        <div class="msg {{ message.tags }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
 </body>
 </html>

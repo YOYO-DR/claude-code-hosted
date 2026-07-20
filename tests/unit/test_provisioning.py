@@ -308,3 +308,107 @@ def _make_user():
     from django_otp.plugins.otp_totp.models import TOTPDevice
     TOTPDevice.objects.create(user=user, name="default", confirmed=True)
     return user
+
+
+# ---------- D13: warning si el PAT no tiene push sobre el repo ----------
+
+def test_check_push_access_true_when_push(monkeypatch):
+    """Si /repos/{owner}/{repo} devuelve permissions.push=True → ok=True."""
+    from panel.core.services import github as gh_svc
+
+    monkeypatch.setattr(
+        gh_svc, "get_repo",
+        lambda tok, name: {
+            "permissions": {"push": True, "maintain": False, "admin": False},
+            "private": False,
+        },
+    )
+    ok, msg = gh_svc.check_push_access("ghp_x", "owner/repo")
+    assert ok is True
+    assert msg == "ok"
+
+
+def test_check_push_access_false_when_no_push_public(monkeypatch):
+    """Repo público + permissions.push=False → ok=False, mensaje sobre PAT."""
+    from panel.core.services import github as gh_svc
+
+    monkeypatch.setattr(
+        gh_svc, "get_repo",
+        lambda tok, name: {
+            "permissions": {"push": False, "maintain": False, "admin": False},
+            "private": False,
+        },
+    )
+    ok, msg = gh_svc.check_push_access("ghp_x", "owner/public-repo")
+    assert ok is False
+    assert "push" in msg.lower()
+    assert "403" in msg or "scope" in msg.lower() or "fine-grained" in msg.lower()
+
+
+def test_check_push_access_false_when_no_push_private(monkeypatch):
+    from panel.core.services import github as gh_svc
+
+    monkeypatch.setattr(
+        gh_svc, "get_repo",
+        lambda tok, name: {"permissions": {"push": False}, "private": True},
+    )
+    ok, msg = gh_svc.check_push_access("ghp_x", "owner/private-repo")
+    assert ok is False
+    assert "privado" in msg.lower() or "push" in msg.lower()
+
+
+def test_check_push_access_false_when_repo_404(monkeypatch):
+    from panel.core.services import github as gh_svc
+
+    def _raise(tok, name):
+        raise gh_svc.GitHubError(404, "Not Found")
+
+    monkeypatch.setattr(gh_svc, "get_repo", _raise)
+    ok, msg = gh_svc.check_push_access("ghp_x", "owner/missing")
+    assert ok is False
+    assert "404" in msg
+
+
+def test_check_and_flag_push_access_sets_warning(monkeypatch, tmp_path):
+    """provision_project debe marcar github_warn_no_push=True si no hay push."""
+    from panel.core.services import github as gh_svc
+    from panel.core.services import provisioning as prov_svc
+
+    monkeypatch.setattr(
+        gh_svc, "check_push_access",
+        lambda tok, name: (False, "no push"),
+    )
+    monkeypatch.setattr(gh_svc, "has_token", lambda: True)
+    monkeypatch.setattr(gh_svc, "get_token", lambda: "ghp_x")
+
+    p = _project("warned", tmp_path)
+    p.github_repo = "owner/public"
+    p.github_enabled = True
+    p.save()
+
+    assert p.github_warn_no_push is False
+    prov_svc._check_and_flag_push_access(p)
+    p.refresh_from_db()
+    assert p.github_warn_no_push is True
+
+
+def test_check_and_flag_push_access_idempotent_when_ok(monkeypatch, tmp_path):
+    """Si el push YA está OK, no debe tocar la fila (no-op)."""
+    from panel.core.services import github as gh_svc
+    from panel.core.services import provisioning as prov_svc
+
+    monkeypatch.setattr(
+        gh_svc, "check_push_access",
+        lambda tok, name: (True, "ok"),
+    )
+    monkeypatch.setattr(gh_svc, "has_token", lambda: True)
+    monkeypatch.setattr(gh_svc, "get_token", lambda: "ghp_x")
+
+    p = _project("ok-repo", tmp_path)
+    p.github_repo = "owner/private"
+    p.github_enabled = True
+    p.save()
+
+    prov_svc._check_and_flag_push_access(p)
+    p.refresh_from_db()
+    assert p.github_warn_no_push is False
