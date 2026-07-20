@@ -31,8 +31,56 @@ def _serialize_session(s: Session) -> dict:
 @require_GET
 @require_verified_json
 def list_sessions(request: HttpRequest) -> JsonResponse:
-    qs = Session.objects.select_related("project").order_by("-created_at")[:200]
-    return JsonResponse([_serialize_session(s) for s in qs], safe=False)
+    """GET /api/v1/sessions/?status=&project=&q=&limit=&offset=
+    Lista de sesiones recientes (default 200). Soporta filtros:
+      - status: CSV de status (ej 'running,waiting_approval')
+      - project: slug exacto (o 'null' para sesiones huérfanas)
+      - q: texto libre — busca en project.slug y session.id prefix
+      - limit (default 200, máx 500), offset (default 0)
+    Orden: -created_at.
+    """
+    qs = Session.objects.select_related("project").order_by("-created_at")
+
+    # status filter (CSV)
+    status_csv = (request.GET.get("status") or "").strip()
+    if status_csv:
+        wanted = [s.strip() for s in status_csv.split(",") if s.strip()]
+        valid = {c[0] for c in Session.Status.choices}
+        wanted = [s for s in wanted if s in valid]
+        if wanted:
+            qs = qs.filter(status__in=wanted)
+
+    # project slug filter
+    proj = (request.GET.get("project") or "").strip()
+    if proj == "null":
+        qs = qs.filter(project__isnull=True)
+    elif proj:
+        qs = qs.filter(project__slug=proj)
+
+    # texto libre en slug o prefijo UUID
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        from django.db.models import Q
+        qs = qs.filter(Q(project__slug__icontains=q) | Q(id__istartswith=q))
+
+    # paging
+    try:
+        limit = min(max(int(request.GET.get("limit", "200")), 1), 500)
+    except ValueError:
+        limit = 200
+    try:
+        offset = max(int(request.GET.get("offset", "0")), 0)
+    except ValueError:
+        offset = 0
+
+    total = qs.count()
+    page = qs[offset:offset + limit]
+    return JsonResponse({
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "results": [_serialize_session(s) for s in page],
+    }, safe=False)
 
 
 @require_GET

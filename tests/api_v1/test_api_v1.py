@@ -152,9 +152,10 @@ def test_sessions_list_returns_sessions(tmp_path):
     c = _client_verified()
     r = c.get("/api/v1/sessions/")
     assert r.status_code == 200
-    data = r.json()
-    assert len(data) == 1
-    assert data[0]["project"] == "alpha"
+    body = r.json()
+    # FASE UX-S.1: la respuesta pasó de array plano a {results: [...], total}.
+    assert body["total"] == 1
+    assert body["results"][0]["project_slug"] == "alpha"
 
 
 def test_session_message_sends_to_redis(monkeypatch, tmp_path):
@@ -192,6 +193,53 @@ def test_session_message_rejects_wrong_state(tmp_path):
 
 
 # ---------- /api/v1/projects/ ----------
+
+def _session(slug: str, status: str = Session.Status.IDLE):
+    """Helper: crea proyecto + sesión con status dado."""
+    p = _project(slug, Path("/tmp") / f"sess-{slug}-{status}")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    return Session.objects.create(project=p, status=status)
+
+
+def test_sessions_list_filters_by_status_csv(tmp_path):
+    """FASE UX-S.1: ?status=running,waiting_approval filtra la lista."""
+    s_run = _session("s-run", Session.Status.RUNNING)
+    _session("s-idle", Session.Status.IDLE)
+    _session("s-stopped", Session.Status.STOPPED)
+    c = _client_verified()
+    r = c.get("/api/v1/sessions/?status=running,waiting_approval")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["results"][0]["id"] == str(s_run.id)
+    ids = [r["id"] for r in body["results"]]
+    assert str(s_run.id) in ids
+
+
+def test_sessions_list_filters_by_project_and_text(tmp_path):
+    _session("alpha", Session.Status.IDLE)
+    _session("beta", Session.Status.IDLE)
+    c = _client_verified()
+    r = c.get("/api/v1/sessions/?project=alpha")
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+    # texto libre por slug
+    r = c.get("/api/v1/sessions/?q=bet")
+    assert r.json()["total"] == 1
+    assert r.json()["results"][0]["project_slug"] == "beta"
+
+
+def test_sessions_list_ignores_invalid_status(tmp_path):
+    """Si llega un status desconocido, NO se filtra por él (defensa)."""
+    s = _session("valid", Session.Status.IDLE)
+    c = _client_verified()
+    r = c.get("/api/v1/sessions/?status=bogus,idle")
+    assert r.status_code == 200
+    body = r.json()
+    # Filtró solo por "idle" (válido); "bogus" se descarta.
+    assert body["total"] == 1
+    assert body["results"][0]["id"] == str(s.id)
+
 
 def test_projects_list(tmp_path):
     _project("alpha", tmp_path)
