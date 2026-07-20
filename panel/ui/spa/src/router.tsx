@@ -2,7 +2,7 @@
 // Las definimos con createRoute() en lugar de createFileRoute() para
 // evitar depender del plugin de generación de tipos.
 
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext } from "react";
 import {
   createRouter, createRoute, createRootRoute, Outlet,
 } from "@tanstack/react-router";
@@ -41,11 +41,11 @@ const rootRoute = createRootRoute({
 });
 
 function RootLayout() {
-  const { me, refresh } = useAuth();
-  // Re-fetch al montar por si el boot inicial perdió la cookie (raro pero posible).
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  // Sin useEffect(refresh) aquí — AuthProvider ya hace refresh al mount.
+  // Si lo añadiéramos, cada re-render del RootLayout dispararía otro fetch
+  // → loop /api/v1/me/ cada segundo. El caller que necesite refrescar
+  // (login, logout, settings) llama a refresh() explícitamente.
+  const { me } = useAuth();
   const authed = !!me?.is_verified;
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
