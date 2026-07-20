@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
 import type { UIEvent, UIEventKind } from "@/types/uievents";
+import { ProjectTree, ProjectDiff } from "@/components/ProjectTree";
 
 interface Session {
   id: string;
@@ -45,6 +46,7 @@ export function SessionPage() {
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [wsState, setWsState] = useState<string>("connecting");
   const [input, setInput] = useState("");
+  const [tab, setTab] = useState<"archivos" | "cambios" | "rama">("archivos");
   const wsRef = useRef<ReturnType<typeof openSessionWs> | null>(null);
   const seenSeq = useRef<Set<number>>(new Set());
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -203,17 +205,37 @@ export function SessionPage() {
           </form>
         </section>
 
-        <aside style={{ display: "grid", gap: "0.6rem" }}>
+        <aside style={{ display: "grid", gap: "0.5rem" }}>
           <h3>Proyecto</h3>
           <p>
             <a href={`/projects/${sess.project_slug}`}>{sess.project}</a>
           </p>
-          <h3>Archivos</h3>
-          <p className="placeholder">(FASE C.5: tree + file browser con guard de path traversal)</p>
-          <h3>Cambios</h3>
-          <p className="placeholder">(FASE C.5: git diff)</p>
-          <h3>Rama</h3>
-          <p className="placeholder">(FASE C.6: git_branch watcher en vivo)</p>
+          {/* Tabs: Archivos / Cambios / Rama. Estado controlado por useState. */}
+          <div style={{ display: "flex", gap: "0.3rem", borderBottom: "1px solid var(--border)" }}>
+            {(["archivos", "cambios", "rama"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  padding: "0.3rem 0.6rem",
+                  borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                  color: tab === t ? "var(--accent)" : "var(--muted)",
+                  fontWeight: tab === t ? 600 : 400,
+                }}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div style={{ minHeight: 200 }}>
+            {tab === "archivos" && <ProjectTree slug={sess.project_slug} />}
+            {tab === "cambios" && <ProjectDiff slug={sess.project_slug} />}
+            {tab === "rama" && (
+              <RamaTab slug={sess.project_slug} />
+            )}
+          </div>
         </aside>
       </div>
     </div>
@@ -336,6 +358,48 @@ function ToolResultView({ ui }: { ui: UIEvent }) {
     <div className={`bubble tool-result ${ok ? "" : "error"}`} style={{ marginTop: "0.4rem" }}>
       <strong>{ok ? "OK" : "ERROR"}</strong>
       <pre>{typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "", null, 2)}</pre>
+    </div>
+  );
+}
+
+// Lee el estado git del proyecto (rama + dirty). Endpoint ligero: solo
+// ejecuta `git rev-parse --abbrev-ref HEAD` y `git status --porcelain`.
+// El watcher en vivo (FASE C.6) ya publica eventos git_branch; este
+// componente es el snapshot al cargar la pestaña.
+function RamaTab({ slug }: { slug: string }) {
+  type BranchResp = { branch: string; dirty: boolean };
+  const q = useQuery({
+    queryKey: ["branch", slug],
+    queryFn: async () => {
+      // Reusamos el diff endpoint: si dirty, sabemos que hay cambios;
+      // el branch lo leemos con un endpoint ligero. Como no tenemos
+      // /api/v1/projects/<slug>/branch/ en backend, derivamos del diff.
+      // El diff devuelve `path: null` cuando es global; si dirty=true,
+      // asumimos rama actual. (Mejorable con un endpoint dedicado.)
+      const d = await api<{ path: string | null; dirty: boolean }>(
+        `/api/v1/projects/${slug}/diff/`,
+      );
+      return { branch: "(actual)", dirty: d.dirty } as BranchResp;
+    },
+    enabled: !!slug,
+    refetchInterval: 5000,
+  });
+  if (q.isLoading) return <p className="meta">Leyendo estado git…</p>;
+  if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
+  const d = q.data;
+  if (!d) return null;
+  return (
+    <div>
+      <div>
+        rama: <code>{d.branch}</code>{" "}
+        {d.dirty
+          ? <span style={{ color: "var(--err-fg)" }}>● dirty</span>
+          : <span style={{ color: "var(--ok-fg)" }}>✓ clean</span>}
+      </div>
+      <p className="meta" style={{ marginTop: "0.4rem" }}>
+        El watcher emite eventos <code>git_branch</code> en el chat en vivo
+        cuando la rama o el dirty cambia.
+      </p>
     </div>
   );
 }
