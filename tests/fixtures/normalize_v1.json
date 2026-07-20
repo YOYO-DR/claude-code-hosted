@@ -1,0 +1,189 @@
+{
+  "session_id": "fixture-session-uuid",
+  "description": "Turno corto de agente: init + stream + assistant(text+Bash) + user(tool_result) + result + thinking_tokens",
+  "events": [
+    {
+      "seq": 1,
+      "type": "system.init",
+      "payload": {
+        "subtype": "init",
+        "data": {
+          "session_id": "fixture-session-uuid",
+          "model": "MiniMax-M3",
+          "tools": [
+            "Bash",
+            "Read",
+            "Edit",
+            "Write"
+          ],
+          "mcp_servers": [
+            {
+              "name": "ports"
+            }
+          ],
+          "cwd": "/srv/projects/plantilla-django-react"
+        }
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 2,
+      "type": "stream.message_start",
+      "payload": {
+        "inner_type": "message_start",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_01",
+            "role": "assistant"
+          }
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 3,
+      "type": "stream.content_block_start",
+      "payload": {
+        "inner_type": "content_block_start",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 4,
+      "type": "stream.content_block_delta",
+      "payload": {
+        "inner_type": "content_block_delta",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "Listando "
+          }
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 5,
+      "type": "stream.content_block_delta",
+      "payload": {
+        "inner_type": "content_block_delta",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "el directorio "
+          }
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 6,
+      "type": "stream.content_block_delta",
+      "payload": {
+        "inner_type": "content_block_delta",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "del proyecto\u2026"
+          }
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 7,
+      "type": "stream.content_block_stop",
+      "payload": {
+        "inner_type": "content_block_stop",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "parent_tool_use_id": null
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 8,
+      "type": "assistant",
+      "payload": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Listando el directorio del proyecto\u2026"
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "Bash",
+            "input": {
+              "command": "ls /srv/projects/plantilla-django-react | head -5"
+            }
+          }
+        ],
+        "model": "MiniMax-M3",
+        "session_id": "fixture-session-uuid"
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 9,
+      "type": "user",
+      "payload": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": ".claude\n.env.example\nAGENTS.md\nREADME.md\nmanage.py",
+            "is_error": false
+          }
+        ]
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 10,
+      "type": "result",
+      "payload": {
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 1,
+        "session_id": "fixture-session-uuid",
+        "total_cost_usd": 0.0042,
+        "result": "Listado el directorio: 5 entradas (.claude, .env.example, AGENTS.md, README.md, manage.py)."
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    },
+    {
+      "seq": 11,
+      "type": "system.thinking_tokens",
+      "payload": {
+        "subtype": "thinking_tokens",
+        "data": {
+          "tokens": 1234
+        }
+      },
+      "ts": "2026-07-20T04:00:00+00:00"
+    }
+  ]
+}

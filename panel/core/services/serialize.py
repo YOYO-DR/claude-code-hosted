@@ -11,6 +11,7 @@ from typing import Any
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -25,6 +26,7 @@ _TYPE_NAME = {
     AssistantMessage: "assistant",
     UserMessage: "user",
     ResultMessage: "result",
+    StreamEvent: "stream",
 }
 
 
@@ -35,6 +37,11 @@ def event_type(msg: Any) -> str:
             subtype = getattr(msg, "subtype", None)
             if cls is SystemMessage and subtype:
                 return f"system.{subtype}"
+            # StreamEvent: type concreto del dict interno (message_start, etc.)
+            if cls is StreamEvent:
+                ev: Any = getattr(msg, "event", None) or {}
+                inner = ev.get("type", "unknown")
+                return f"stream.{inner}"
             return name
     return type(msg).__name__.lower()
 
@@ -97,5 +104,13 @@ def serialize_message(msg: Any) -> dict[str, Any]:
             "session_id": msg.session_id,
             "total_cost_usd": msg.total_cost_usd,
             "result": msg.result,
+        }
+    if isinstance(msg, StreamEvent):
+        # El dict interno del evento (Anthropic SSE-style). Lo pasamos entero
+        # en `event` para auditoría; el front consume `ui_event` (FASE B).
+        return {
+            "inner_type": (msg.event or {}).get("type"),
+            "event": _json_safe(msg.event),
+            "parent_tool_use_id": msg.parent_tool_use_id,
         }
     return {"raw": _json_safe(getattr(msg, "__dict__", str(msg)))}

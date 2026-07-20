@@ -109,6 +109,9 @@ class Worker:
         self._session: Session | None = None
         self._slug: str = ""
         self._stop = asyncio.Event()
+        # FASE B: acumulador de deltas de stream_event por content_block_index.
+        from panel.core.events.normalize import StreamAccumulator
+        self._stream_acc = StreamAccumulator()
 
     async def run(self) -> None:
         session = await self._load_session()
@@ -171,8 +174,45 @@ class Worker:
     async def _emit(self, session: Session, sdk_msg: object) -> None:
         etype = serialize.event_type(sdk_msg)
         payload = serialize.serialize_message(sdk_msg)
-        # Postgres primero (con seq); si ya existía, no re-publicar.
-        event = await sync_to_async(event_svc.persist_event)(session, self._seq, etype, payload)
+        # FASE B: normalizar a UIEvent v1 (DUAL_WRITE).
+        # StreamEvent es especial: el normalizer puede emitir VARIOS UIEvent
+        # (uno por delta de texto/thinking) — los persistimos con seq
+        # compartido (los deltas comparten seq con el stream_event crudo)
+        # para que el seq siga siendo único por (session,seq). Para evitar
+        # duplicar el constraint UNIQUE(session,seq), los UIEvent de streaming
+        # NO se persisten en BD: se publican SOLO por Redis (efecto en vivo).
+        # El AssistantMessage "macro" final trae el texto completo y SÍ
+        # persiste el UIEvent agent_text streaming=False en BD (snapshot).
+        from claude_agent_sdk import StreamEvent as _StreamEvent  # noqa: I001
+        from panel.core.events import normalize as norm
+
+        if isinstance(sdk_msg, _StreamEvent):
+            # 1) Persistimos el stream_event crudo como siempre.
+            event = await sync_to_async(event_svc.persist_event)(
+                session, self._seq, etype, payload
+            )
+            if event is None:
+                return
+            self._seq += 1
+            # 2) Deltas → UIEvent efímeros por Redis (no BD).
+            ui_events = self._stream_acc.feed_stream(sdk_msg.event or {})
+            for ue in ui_events:
+                ue.seq = event.seq  # mismo seq del stream_event crudo
+                ue.session_id = str(session.id)
+                try:
+                    self._redis_publish_ui(ue.to_dict())
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("publish UI delta falló: %s", exc)
+            return
+
+        # Mensaje macro (assistant/user/system/result): persistir crudo + UIEvent.
+        ui_events = norm.normalize_sdk_message(
+            sdk_msg, seq=self._seq, session_id=str(session.id),
+        )
+        ui_event_dict = ui_events[0].to_dict() if ui_events else None
+        event = await sync_to_async(event_svc.persist_event)(
+            session, self._seq, etype, payload, ui_event=ui_event_dict,
+        )
         if event is None:
             return
         self._seq += 1
@@ -189,6 +229,30 @@ class Worker:
         r = sync_redis.from_url(settings.REDIS_URL)
         try:
             event_svc.publish_event(r, self.sid, event)
+        finally:
+            r.close()
+
+    def _redis_publish_ui(self, ui_event: dict) -> None:
+        """Publica un UIEvent efímero (típicamente un delta de streaming) en
+        el canal `out` SIN persistirlo en BD. El cliente del chat lo recibe en
+        vivo y lo descarta en cuanto llega el bloque 'macro' final.
+        Usa el MISMO cliente síncrono que `_publish` para evitar un connection
+        pool efímero por delta (alto throughput)."""
+        import json  # noqa: I001
+        import redis as sync_redis
+
+        from panel.core import bus
+
+        r = sync_redis.from_url(settings.REDIS_URL)
+        try:
+            r.publish(
+                bus.key_out(self.sid),
+                json.dumps(
+                    {"seq": ui_event["seq"], "type": "ui_delta",
+                     "payload": {}, "ui_event": ui_event,
+                     "ts": ui_event["ts"]},
+                ),
+            )
         finally:
             r.close()
 
@@ -253,6 +317,11 @@ class Worker:
             model=profile.model or None,
             env=env,
             setting_sources=["user", "project"],
+            # FASE B: recibir stream_event con deltas token-a-token para que el
+            # normalizador pueda emitir `agent_text.streaming=True` (efecto
+            # "escribiendo…" del chat OpenHands). El AssistantMessage "macro"
+            # sigue llegando al final con el texto completo.
+            include_partial_messages=True,
         )
 
     async def _can_use_tool(

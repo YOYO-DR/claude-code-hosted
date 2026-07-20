@@ -1,0 +1,91 @@
+{
+  "ui_events": [
+    {
+      "seq": 1,
+      "kind": "session_status",
+      "payload": {
+        "status": "init",
+        "model": "MiniMax-M3",
+        "tools": [
+          "Bash",
+          "Read",
+          "Edit",
+          "Write"
+        ],
+        "mcp_servers": [
+          {
+            "name": "ports"
+          }
+        ],
+        "cwd": "/srv/projects/plantilla-django-react"
+      }
+    },
+    {
+      "seq": 8,
+      "kind": "agent_text",
+      "payload": {
+        "text": "Listando el directorio del proyecto\u2026",
+        "streaming": false
+      }
+    },
+    {
+      "seq": 8,
+      "kind": "tool_call",
+      "payload": {
+        "tool_use_id": "toolu_01",
+        "name": "Bash",
+        "input": {
+          "command": "ls /srv/projects/plantilla-django-react | head -5"
+        }
+      }
+    },
+    {
+      "seq": 9,
+      "kind": "tool_result",
+      "payload": {
+        "tool_use_id": "toolu_01",
+        "ok": true,
+        "output": ".claude\n.env.example\nAGENTS.md\nREADME.md\nmanage.py",
+        "truncated": false
+      }
+    },
+    {
+      "seq": 10,
+      "kind": "run_result",
+      "payload": {
+        "ok": true,
+        "cost_usd": 0.0042,
+        "num_turns": 1,
+        "summary": "Listado el directorio: 5 entradas (.claude, .env.example, AGENTS.md, README.md, manage.py).",
+        "duration_ms": 0,
+        "stop_reason": null
+      }
+    }
+  ],
+  "deltas": [
+    {
+      "seq": 4,
+      "kind": "agent_text",
+      "payload": {
+        "text": "Listando ",
+        "streaming": true
+      }
+    },
+    {
+      "seq": 5,
+      "kind": "agent_text",
+      "payload": {
+        "text": "Listando el directorio ",
+        "streaming": true
+      }
+    },
+    {
+      "seq": 6,
+      "kind": "agent_text",
+      "payload": {
+        "text": "Listando el directorio del proyecto\u2026",
+        "streaming": true
+      }
+    }
+  ]
+}

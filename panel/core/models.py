@@ -149,6 +149,11 @@ class Event(TimestampedModel):
     type = models.CharField(max_length=50)
     payload = models.JSONField(default=dict)
     ts = models.DateTimeField()
+    # FASE B (DUAL_WRITE): UIEvent normalizado v1. Nullable: los eventos
+    # previos al despliegue (y los `system.thinking_tokens` que no merecen
+    # UIEvent) quedan en null. El front consume `ui_event` cuando está,
+    # cae a `payload` (crudo) si es None — backfill nunca rompe la UI.
+    ui_event = models.JSONField(null=True, blank=True)
 
     class Meta:
         constraints = [
