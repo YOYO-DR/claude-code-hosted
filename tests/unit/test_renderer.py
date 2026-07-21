@@ -189,6 +189,59 @@ def test_atomic_apply_overwrites(home, tmp_path):
     assert not list(target.parent.glob("*.tmp"))
 
 
+def test_apply_render_calls_chown_agents(home, tmp_path, monkeypatch):
+    """SP8: apply_render debe llamar chown_agents sobre cada path que escribe,
+    para que el worker (User=agents) pueda editar CLAUDE.md / AGENTS.md /
+    .mcp.json / .claude/settings.json. Sin esto, los archivos quedan con el
+    uid del proceso que escribe (root si fue run_render, panel si fue
+    provision) y el agente pierde acceso de escritura."""
+    from panel.core.services import privileged
+
+    _project("alpha", tmp_path)
+    called: list[str] = []
+    monkeypatch.setattr(
+        privileged, "chown_agents", lambda p: called.append(p),
+    )
+    renderer.render_all()
+    chowned = {p for p in called}
+    assert str(tmp_path / "srv" / "alpha" / "CLAUDE.md") in chowned
+    assert str(tmp_path / "srv" / "alpha" / ".mcp.json") in chowned
+    assert str(tmp_path / "srv" / "alpha" / ".claude" / "settings.json") in chowned
+
+
+def test_chown_agents_skips_missing_path(home, tmp_path, monkeypatch):
+    """SP8: si el path ya no existe (race con prune), el chown no debe
+    explotar — `apply_render` lo invoca incondicionalmente."""
+    from panel.core.services import privileged
+
+    monkeypatch.setattr(privileged, "_is_root", lambda: True)
+    # No hay error ni excepción si el path no existe.
+    privileged.chown_agents(str(tmp_path / "srv" / "alpha" / "CLAUDE.md"))
+
+
+def test_chown_agents_via_sudo_helper(monkeypatch, tmp_path):
+    """SP8: cuando NO somos root pero hay helper sudo, chown_agents delega
+    en el helper en lugar de intentar chown directo (que fallaría con
+    PermissionError). Mockeamos sudo para no necesitar sudo real en CI."""
+    from panel.core.services import privileged
+
+    monkeypatch.setattr(privileged, "_is_root", lambda: False)
+    monkeypatch.setattr(privileged, "_can_sudo", lambda h: h == privileged.CHOWN_HELPER)
+    calls: list[list[str]] = []
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        class R: returncode = 0; stderr = b""; stdout = b""
+        return R()
+    monkeypatch.setattr(privileged.subprocess, "run", fake_run)
+    target = str(tmp_path / "srv" / "alpha" / "CLAUDE.md")
+    privileged.chown_agents(target)
+    assert calls, "no se llamó al helper"
+    assert calls[0][0] == "sudo"
+    assert calls[0][1] == "-n"
+    assert calls[0][2] == privileged.CHOWN_HELPER
+    assert calls[0][3] == target
+
+
 def _all_files(tmp_path):
     files = []
     for root in (tmp_path / "agents", tmp_path / "srv"):

@@ -108,13 +108,24 @@ def render_global() -> dict[str, str]:
 
 
 def apply_render(rendered: dict[str, str]) -> None:
-    """Escritura atómica por archivo: tmp + os.replace (misma partición)."""
+    """Escritura atómica por archivo: tmp + os.replace (misma partición).
+
+    SP8: tras cada write hace `chown agents:agents` (vía sudo helper o
+    in-process si root). Sin esto, los archivos quedan con el uid del
+    proceso que escribe (root si fue invocado por `run_render`, panel si fue
+    invocado directo desde `provision_project`), y el worker — User=agents
+    — no puede editarlos. El agente perdería el hábito de mantener CLAUDE.md
+    al primer provision.
+    """
+    from panel.core.services import privileged
+
     for path, content in rendered.items():
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, p)
+        privileged.chown_agents(str(p))
 
 
 def _prune_skills(projects: list[Project]) -> None:

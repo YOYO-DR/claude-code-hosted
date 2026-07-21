@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid as _uuid
 
 import redis.asyncio as aioredis
 from channels.db import database_sync_to_async
@@ -13,6 +14,15 @@ from django.conf import settings
 
 from panel.core import bus
 from panel.core.stream import SeqDedup
+
+
+def _perm_seq(perm_id: str) -> int:
+    """SP7: seq sintético estable por PermissionRequest. El canal `perm` es
+    independiente del stream de eventos (que va por `out`), así que sus
+    mensajes no tienen seq real. Para que el cliente los dedupe como el resto
+    del backlog, derivamos un int firmado del uuid: dos perm requests del
+    mismo session siempre tienen uuids distintos y, por tanto, seqs distintos."""
+    return int.from_bytes(_uuid.UUID(perm_id).bytes[:4], "big", signed=True)
 
 
 def make_redis():
@@ -124,9 +134,40 @@ class SessionConsumer(AsyncWebsocketConsumer):
                     {**data, "_channel": "out", "_event": data}
                 ))
             elif channel == bus.key_perm(self.sid):
-                await self.send(text_data=json.dumps(
-                    {"_channel": "perm", "_event": data, **data}
-                ))
+                # SP7: el chat espera mensajes con shape {seq, type, payload,
+                # ui_event, ts} para renderizar bubbles. El `perm` channel emite
+                # `serialize_request` (dict plano sin kind/ui_event), así que
+                # antes el cliente descartaba el mensaje en silencio (ver
+                # ingestEvent en SessionDetail.tsx: `if (!msg.ui_event) return`)
+                # y el usuario solo veía el `tool_call` con tag amarillo sin
+                # poder aprobar. Lo envolvemos como UIEvent v1 permission_request
+                # con seq sintético estable por uuid para dedupe.
+                perm_id = str(data.get("id") or "")
+                if not perm_id:
+                    continue
+                ts = data.get("expires_at") or data.get("created_at") or ""
+                payload = {
+                    "id": perm_id,
+                    "tool": data.get("tool", ""),
+                    "input_preview": data.get("input_preview", ""),
+                }
+                msg = {
+                    "seq": _perm_seq(perm_id),
+                    "type": "permission_request",
+                    "payload": data,
+                    "ui_event": {
+                        "v": 1,
+                        "seq": _perm_seq(perm_id),
+                        "session_id": self.sid,
+                        "ts": ts,
+                        "kind": "permission_request",
+                        "payload": payload,
+                    },
+                    "ts": ts,
+                    "_channel": "perm",
+                    "id": perm_id,
+                }
+                await self.send(text_data=json.dumps(msg))
 
     def _query_param(self, name: str, default: str) -> str:
         qs = self.scope.get("query_string", b"").decode()

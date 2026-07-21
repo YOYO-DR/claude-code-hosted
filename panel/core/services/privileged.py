@@ -19,6 +19,12 @@ RENDER_HELPER = "/opt/panel/deploy/panel-render.sh"
 PROVISION_HELPER = "/opt/panel/deploy/panel-provision.sh"
 CLONE_HELPER = "/opt/panel/deploy/panel-clone.sh"
 PURGE_HELPER = "/opt/panel/deploy/panel-purge.sh"
+# SP8: chown agents:agents de archivos que el render escribe en dirs del
+# proyecto (CLAUDE.md, AGENTS.md, .mcp.json, .claude/settings.json, SKILL.md).
+# Sin esto quedan root:root (porque el render corre como root vía sudo o como
+# panel:panel cuando se invoca directo desde provision), y el worker — que
+# corre como agents:agents — no puede editarlos.
+CHOWN_HELPER = "/opt/panel/deploy/panel-chown-agents.sh"
 
 
 class ProvisioningError(RuntimeError):
@@ -79,6 +85,35 @@ def run_render() -> None:
     from panel.core import renderer
 
     renderer.render_all()
+
+
+def chown_agents(path: str) -> None:
+    """SP8: chown agents:agents de un archivo recién escrito por el render.
+
+    El helper valida que el path esté bajo /srv/projects/ (defensa contra
+    path traversal desde el renderer). Si el archivo no existe todavía o el
+    caller no tiene root ni sudo, no hace nada: el render usualmente corre
+    como root vía sudo, así que este es el camino normal.
+    """
+    if not _is_root() and _can_sudo(CHOWN_HELPER):
+        subprocess.run(
+            ["sudo", "-n", CHOWN_HELPER, path], check=False,
+            # El helper devuelve exit 0 si aplicó chown o si el path ya no
+            # existe (race con prune). Capturamos stderr solo para debug.
+            capture_output=True,
+        )
+        return
+    if _is_root() and os.path.exists(path):
+        # Ejecutamos en proceso cuando ya somos root (tests, dev local).
+        # Sin sudo helper porque no hace falta.
+        import pwd as _pwd
+        import grp as _grp
+        try:
+            uid = _pwd.getpwnam("agents").pw_uid
+            gid = _grp.getgrnam("agents").gr_gid
+            os.chown(path, uid, gid)
+        except (KeyError, PermissionError, OSError):
+            pass
 
 
 def run_provision(slug: str, path: str) -> None:

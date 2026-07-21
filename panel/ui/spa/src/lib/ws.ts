@@ -49,6 +49,11 @@ export function openSessionWs(
   let retries = 0;
   let closed = false;
   const seenSeq = new Set<number>();
+  // SP7: los mensajes del canal `perm` no comparten seq con el stream de
+  // eventos (van por otro pubsub), así que los dedupeamos por su uuid.
+  // Si no, el mismo perm request que llega por backlog y por pubsub dibuja
+  // el bubble dos veces.
+  const seenPermIds = new Set<string>();
 
   function setState(s: ConnectionState) {
     state = s;
@@ -67,11 +72,22 @@ export function openSessionWs(
     };
     ws.onmessage = (ev) => {
       try {
-        const data = JSON.parse(ev.data) as RawEventMessage;
-        // SeqDedup cliente: por si el backlog y el pubsub se solapan.
-        if (seenSeq.has(data.seq)) return;
-        seenSeq.add(data.seq);
-        if (data.seq > lastSeq) lastSeq = data.seq;
+        const data = JSON.parse(ev.data) as RawEventMessage & {
+          _channel?: string;
+          id?: string;
+        };
+        // SP7: dedupe por id para mensajes perm (cada uno es una aprobación
+        // discreta); por seq para el resto del stream.
+        if (data._channel === "perm") {
+          const permId = data.id;
+          if (!permId) return;
+          if (seenPermIds.has(permId)) return;
+          seenPermIds.add(permId);
+        } else {
+          if (seenSeq.has(data.seq)) return;
+          seenSeq.add(data.seq);
+          if (data.seq > lastSeq) lastSeq = data.seq;
+        }
         handlers.onEvent(data);
       } catch (err) {
         console.error("[ws] mensaje no parseable:", err, ev.data);

@@ -10,3 +10,7 @@ panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-clone.sh /srv/projects/*
 # del script (case /srv/projects/* + no `..`), pero sudoers lo acota al
 # whitelist como defensa adicional.
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-purge.sh /srv/projects/*
+
+# SP8: chown a agents:agents de archivos materializados por el render. El
+# script valida que el path esté bajo /srv/projects/.
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-chown-agents.sh /srv/projects/*
