@@ -126,12 +126,41 @@ class Worker:
         await self._set_status(session, Session.Status.RUNNING, started=True)
         hb = asyncio.create_task(self._heartbeat())
         try:
-            async with ClaudeSDKClient(options=options) as client:
-                await self._loop(session, client)
+            await self._run_client(session, options)
         finally:
             hb.cancel()
             await self._set_status(session, Session.Status.STOPPED, ended=True)
             await self.redis.aclose()
+
+    async def _run_client(self, session: Session, options: ClaudeAgentOptions) -> None:
+        """Abre el cliente del SDK y corre el loop.
+
+        SP6: si el arranque falla CON `resume` (transcript borrado a mano, id
+        que el CLI ya no conoce), reintenta UNA vez sin contexto en vez de
+        morir y dejar a systemd en bucle de reinicio. `connected` distingue
+        el fallo de arranque de un fallo a mitad de conversación: ese último
+        se propaga tal cual, nunca se reintenta el turno.
+        """
+        connected = False
+        try:
+            async with ClaudeSDKClient(options=options) as client:
+                connected = True
+                await self._loop(session, client)
+        except Exception:
+            if connected or not options.resume:
+                raise
+            log.exception(
+                "resume de %s falló; reintento sin contexto previo", options.resume
+            )
+            await sync_to_async(self._clear_sdk_session)(session)
+            async with ClaudeSDKClient(options=replace(options, resume=None)) as client:
+                await self._loop(session, client)
+
+    def _clear_sdk_session(self, session: Session) -> None:
+        """Olvida el id del SDK que no se pudo reanudar para que el próximo
+        arranque no vuelva a intentarlo."""
+        session.sdk_session_id = None
+        session.save(update_fields=["sdk_session_id", "updated_at"])
 
     async def _loop(self, session: Session, client: ClaudeSDKClient) -> None:
         while not self._stop.is_set():
@@ -411,6 +440,13 @@ class Worker:
             model=profile.model or None,
             env=env,
             setting_sources=["user", "project"],
+            # SP6: `sdk_session_id` solo está poblado si la sesión ya tuvo un
+            # turno — o sea, si esto es un restart (o una recuperación tras
+            # crash). Reanudamos entonces la conversación del SDK para que el
+            # agente conserve el contexto, igual que `claude --resume`. Una
+            # sesión nueva lo tiene en None → arranque limpio. Cero estado
+            # extra que mantener: el propio campo es la señal.
+            resume=session.sdk_session_id or None,
             # FASE B: recibir stream_event con deltas token-a-token para que el
             # normalizador pueda emitir `agent_text.streaming=True` (efecto
             # "escribiendo…" del chat OpenHands). El AssistantMessage "macro"

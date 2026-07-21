@@ -137,6 +137,82 @@ def session_stop(request: HttpRequest, sid: str) -> JsonResponse:
     return JsonResponse({"ok": True, "status": s.status})
 
 
+@csrf_exempt
+@require_POST
+@require_verified_json
+def session_restart(request: HttpRequest, sid: str) -> JsonResponse:
+    """POST /api/v1/sessions/<sid>/restart/ body={"mode": "resume"|"new"}
+
+    Reinicia el worker para aplicar cambios de modelo o de MCP, que no
+    recargan en caliente (§4.3).
+
+    - "resume" (default): reinicia ESTA sesión. El chat conserva su historia
+      (los Event siguen colgando de la misma fila) y el agente conserva el
+      contexto, porque el worker arranca con el `resume` del SDK sobre el
+      `sdk_session_id` guardado.
+    - "new": para esta sesión y arranca otra del mismo proyecto — chat vacío
+      y agente sin contexto. Devuelve el id nuevo para que la SPA navegue.
+
+    409 si el proyecto no está activo. 400 si su path no existe (clone roto).
+    502 si systemctl no puede arrancar el worker.
+    """
+    s = get_object_or_404(Session, id=sid)
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "json inválido"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "body debe ser objeto JSON"}, status=400)
+    mode = (body.get("mode") or "resume").strip()
+    if mode not in ("resume", "new"):
+        return JsonResponse(
+            {"error": f"mode debe ser 'resume' o 'new' (recibido {mode!r})"},
+            status=400,
+        )
+    from panel.core.models import Project
+    project = s.project
+    if project.status != Project.Status.ACTIVE:
+        return JsonResponse(
+            {"error": f"el proyecto '{project.slug}' está {project.status}; no se puede reiniciar"},
+            status=409,
+        )
+    if not os.path.isdir(project.path):
+        return JsonResponse(
+            {"error": f"path del proyecto inexistente: {project.path}. Probablemente el clone falló."},
+            status=400,
+        )
+    from workers import supervisor
+    try:
+        if mode == "new":
+            session_svc.stop_session(s)
+            new = session_svc.start_session(project)
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "mode": "new",
+                    "id": str(new.id),
+                    "previous_id": str(s.id),
+                    "status": new.status,
+                },
+                status=201,
+            )
+        restarted = session_svc.restart_session(s)
+    except supervisor.SupervisorError as exc:
+        return JsonResponse(
+            {"error": f"no pude arrancar el worker: {exc}. Vuelve a intentarlo; si persiste, revisa los sudoers del panel."},
+            status=502,
+        )
+    return JsonResponse({
+        "ok": True,
+        "mode": "resume",
+        "id": str(restarted.id),
+        "status": restarted.status,
+        # False si la sesión nunca llegó a tener un turno: no hay nada que
+        # reanudar y el agente arrancará limpio aunque el chat siga ahí.
+        "resumed": bool(restarted.sdk_session_id),
+    })
+
+
 @require_GET
 @require_verified_json
 def session_events(request: HttpRequest, sid: str) -> JsonResponse:

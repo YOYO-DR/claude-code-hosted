@@ -14,6 +14,7 @@ urlpatterns = [
     path("sessions/<uuid:sid>/", sessions.session_detail, name="api_v1_session_detail"),
     path("sessions/<uuid:sid>/message/", sessions.session_message, name="api_v1_session_message"),
     path("sessions/<uuid:sid>/stop/", sessions.session_stop, name="api_v1_session_stop"),
+    path("sessions/<uuid:sid>/restart/", sessions.session_restart, name="api_v1_session_restart"),
     path("sessions/<uuid:sid>/events/", sessions.session_events, name="api_v1_session_events"),
     path("sessions/create/", sessions.session_create, name="api_v1_session_create"),
     # Projects (+ tree/file/diff FASE C.5)

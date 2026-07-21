@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
+from django.utils import timezone
 
 from panel.core.models import (
     Event,
@@ -1140,6 +1142,160 @@ def test_start_session_emits_session_created_event(monkeypatch, tmp_path):
         for e in step_evs
     ), "no se persistió session.created"
     assert len(started_with) == 1
+
+
+# --- SP6: restart de sesión (resume in-place vs sesión nueva) ---
+
+def _restartable(slug, tmp_path, monkeypatch, **session_extra):
+    """Proyecto con path real + sesión corriendo + supervisor mockeado.
+    Devuelve (project, session, started, stopped) donde started/stopped son
+    las listas de sids que recibió cada llamada del supervisor."""
+    p = _project(slug, tmp_path)
+    p.path = str(tmp_path / slug)
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+    s = Session.objects.create(
+        project=p, status=Session.Status.IDLE, **session_extra
+    )
+    started: list[str] = []
+    stopped: list[str] = []
+    monkeypatch.setattr(supervisor, "start", lambda sid: started.append(sid))
+    monkeypatch.setattr(supervisor, "stop", lambda sid: stopped.append(sid))
+    return p, s, started, stopped
+
+
+def test_session_restart_resume_keeps_row_and_sdk_session(monkeypatch, tmp_path):
+    """SP6 modo 'resume': misma fila, mismo sdk_session_id (para que el worker
+    haga --resume y el agente conserve el contexto) y eventos intactos (el
+    chat conserva su historia). El worker se para y se vuelve a arrancar."""
+    p, s, started, stopped = _restartable(
+        "rs-resume", tmp_path, monkeypatch, sdk_session_id="sdk-abc-123",
+    )
+    Event.objects.create(
+        session=s, seq=1, type="result", payload={}, ts=timezone.now(),
+    )
+    rows_before = Session.objects.filter(project=p).count()
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "resume"}),
+               content_type="application/json")
+
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["mode"] == "resume"
+    assert body["id"] == str(s.id), "debe seguir siendo LA MISMA sesión"
+    assert body["resumed"] is True
+    # No se creó otra fila.
+    assert Session.objects.filter(project=p).count() == rows_before
+    s.refresh_from_db()
+    assert s.sdk_session_id == "sdk-abc-123", "sin esto el agente pierde el contexto"
+    assert s.status == Session.Status.STARTING
+    assert s.ended_at is None
+    # La historia del chat sigue colgando de la misma sesión.
+    assert s.events.filter(type="result").exists()
+    # El worker se reinició: stop y luego start, sobre el mismo sid.
+    assert stopped == [str(s.id)]
+    assert started == [str(s.id)]
+
+
+def test_session_restart_resume_clears_needs_restart(monkeypatch, tmp_path):
+    """SP6: reiniciar debe apagar el aviso de 'reinicia para aplicar'. Como
+    needs_restart() compara model_profile.updated_at > session.started_at,
+    el restart mueve started_at a ahora."""
+    from panel.core.services import sessions as session_svc
+
+    p, s, _started, _stopped = _restartable("rs-needs", tmp_path, monkeypatch)
+    s.started_at = timezone.now() - timedelta(hours=1)
+    s.save(update_fields=["started_at"])
+    # Cambiar el modelo ahora deja la sesión desfasada.
+    p.model_profile.save()
+    s.refresh_from_db()
+    assert session_svc.needs_restart(s) is True
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "resume"}),
+               content_type="application/json")
+    assert r.status_code == 200, r.content
+    s.refresh_from_db()
+    assert session_svc.needs_restart(s) is False
+
+
+def test_session_restart_new_creates_another_session(monkeypatch, tmp_path):
+    """SP6 modo 'new': para la actual y arranca otra fila del mismo proyecto,
+    sin heredar sdk_session_id (agente sin contexto, chat vacío)."""
+    p, s, started, stopped = _restartable(
+        "rs-new", tmp_path, monkeypatch, sdk_session_id="sdk-old",
+    )
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "new"}),
+               content_type="application/json")
+
+    assert r.status_code == 201, r.content
+    body = r.json()
+    assert body["mode"] == "new"
+    assert body["previous_id"] == str(s.id)
+    assert body["id"] != str(s.id), "debe ser una sesión distinta"
+    new = Session.objects.get(id=body["id"])
+    assert new.project_id == p.id
+    assert new.sdk_session_id is None, "la nueva sesión no debe heredar contexto"
+    assert not new.events.exclude(type="session_step").exists(), "chat vacío"
+    # La vieja quedó parada, no borrada (conserva su historia).
+    s.refresh_from_db()
+    assert s.status == Session.Status.STOPPED
+    assert stopped == [str(s.id)]
+    assert started == [str(new.id)]
+
+
+def test_session_restart_rejects_unknown_mode(monkeypatch, tmp_path):
+    """SP6: un mode desconocido es 400, y no toca al worker."""
+    _p, s, started, stopped = _restartable("rs-bad", tmp_path, monkeypatch)
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "fork"}),
+               content_type="application/json")
+    assert r.status_code == 400, r.content
+    assert "resume" in r.json()["error"] and "new" in r.json()["error"]
+    assert started == [] and stopped == []
+    s.refresh_from_db()
+    assert s.status == Session.Status.IDLE, "no debió tocar la sesión"
+
+
+def test_session_restart_502_when_supervisor_fails(monkeypatch, tmp_path):
+    """SP6: si systemctl falla al rearrancar, 502 legible y la fila NO se
+    borra (a diferencia de start_session, aquí hay historia que conservar)."""
+    _p, s, _started, _stopped = _restartable("rs-502", tmp_path, monkeypatch)
+    def boom(sid):
+        raise supervisor.SupervisorError("unit not found")
+    monkeypatch.setattr(supervisor, "start", boom)
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "resume"}),
+               content_type="application/json")
+
+    assert r.status_code == 502, r.content
+    assert "no pude arrancar el worker" in r.json()["error"]
+    assert Session.objects.filter(pk=s.pk).exists(), "la fila no debe borrarse"
+    s.refresh_from_db()
+    assert s.status == Session.Status.STOPPED
+
+
+def test_session_restart_409_if_project_archived(monkeypatch, tmp_path):
+    """SP6: no se reinicia una sesión de un proyecto archivado."""
+    p, s, started, _stopped = _restartable("rs-arch", tmp_path, monkeypatch)
+    p.status = Project.Status.ARCHIVED
+    p.save(update_fields=["status"])
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/sessions/{s.id}/restart/",
+               data=json.dumps({"mode": "resume"}),
+               content_type="application/json")
+    assert r.status_code == 409, r.content
+    assert started == []
 
 
 # --- SP4: hard-delete, recreate, force_recreate, suggestion en 409 ---

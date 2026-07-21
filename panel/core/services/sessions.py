@@ -100,6 +100,42 @@ def stop_session(session: Session) -> None:
         )
 
 
+def restart_session(session: Session) -> Session:
+    """SP6: reinicia el worker de la MISMA fila (restart in-place).
+
+    Conserva `sdk_session_id`, así que el worker nuevo arranca con `resume=`
+    y el agente mantiene el contexto de la conversación (equivalente a
+    `claude --resume`). Los Event siguen colgando de esta sesión, así que el
+    chat conserva su historia. Es la vía para aplicar un cambio de modelo o
+    de MCP, que no recargan en caliente (§4.3).
+
+    `started_at` se mueve a ahora: es el arranque de ESTE worker y hace que
+    `needs_restart()` vuelva a False una vez aplicado el cambio.
+
+    Si el worker no arranca, la fila queda en STOPPED (no se borra: tiene
+    historia, a diferencia del rollback de `start_session`) y se relanza
+    `SupervisorError`.
+    """
+    stop_session(session)
+    session.refresh_from_db()
+    session.status = Session.Status.STARTING
+    session.started_at = timezone.now()
+    session.ended_at = None
+    session.save(update_fields=["status", "started_at", "ended_at", "updated_at"])
+    _emit_session_step(session, "session.restarting", "Reiniciando worker…")
+    try:
+        supervisor.start(str(session.id))
+    except supervisor.SupervisorError:
+        log.exception("supervisor.start falló al reiniciar %s", session.id)
+        session.status = Session.Status.STOPPED
+        session.ended_at = timezone.now()
+        session.save(update_fields=["status", "ended_at", "updated_at"])
+        raise
+    _emit_session_step(session, "worker.scheduled", "Worker programado, arrancando…")
+    session.refresh_from_db()
+    return session
+
+
 def needs_restart(session: Session) -> bool:
     """True si la config de MCP o el perfil de modelo del proyecto cambió
     después de arrancar la sesión (§4.3: los MCP no recargan en caliente).

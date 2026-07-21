@@ -470,6 +470,26 @@ pre.unboxed {
   padding: 1rem;
 }
 
+/* ---------- SP6: opciones de reinicio de sesión ---------- */
+.restart-options {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+.restart-option {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.7rem 0.8rem;
+}
+.restart-option strong { display: block; margin-bottom: 0.25rem; }
+.restart-option p {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+.restart-option button { width: 100%; }
+
 /* ---------- Cambios tab (diff tree con +/- colors) ---------- */
 
 .diff-header {

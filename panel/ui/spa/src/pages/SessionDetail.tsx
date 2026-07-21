@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
 import type { UIEvent, UIEventKind } from "@/types/uievents";
 import { ProjectTree, ProjectDiff } from "@/components/ProjectTree";
+import { Modal } from "@/components/Modal";
 
 interface Session {
   id: string;
@@ -167,6 +168,7 @@ export function SessionPage() {
   const [wsState, setWsState] = useState<string>("connecting");
   const [input, setInput] = useState("");
   const [tab, setTab] = useState<"archivos" | "cambios" | "rama">("archivos");
+  const [restartOpen, setRestartOpen] = useState(false);
   const wsRef = useRef<ReturnType<typeof openSessionWs> | null>(null);
   const seenSeq = useRef<Set<number>>(new Set());
   const streamRef = useRef<StreamState>({ key: null, kind: null });
@@ -202,6 +204,11 @@ export function SessionPage() {
         if (s === "running" || s === "idle") { ready = true; continue; }
         if (s === "starting") continue;
         latestBoot = String(payload.message ?? s);
+        // SP6: un paso de boot POSTERIOR invalida el "listo" de la corrida
+        // anterior. Sin esto, tras un ↻ Reiniciar la sesión seguiría
+        // pareciendo lista por los eventos viejos y el input dejaría mandar
+        // mensajes a un worker que aún arranca (409).
+        ready = false;
       }
       if (t === "result" || t === "run_result") ready = true;
       if (t === "agent_text" || t === "user" || t === "tool_call") ready = true;
@@ -364,7 +371,13 @@ export function SessionPage() {
         <button onClick={() => stopMut.mutate()} disabled={stopMut.isPending}>
           ■ Stop
         </button>
+        <button onClick={() => setRestartOpen(true)} title="Aplicar cambios de modelo o MCP">
+          ↻ Reiniciar
+        </button>
       </div>
+      {restartOpen && (
+        <RestartSessionModal sid={sid} onClose={() => setRestartOpen(false)} />
+      )}
       {sess.github_warn_no_push && (
         <div className="msg warning">
           ⚠️ El PAT actual <strong>no tiene permisos de push</strong> sobre{" "}
@@ -621,6 +634,94 @@ function RamaTab({ slug }: { slug: string }) {
         {data?.dirty ? <span style={{ color: "var(--err-fg)" }}> ● dirty</span> : null}
       </p>
     </div>
+  );
+}
+
+// SP6: reinicio de sesión. El modelo y los MCP no recargan en caliente
+// (§4.3), así que aplicar un cambio pasa por rearrancar el worker. Dos
+// semánticas distintas, por eso el modal en vez de un botón directo:
+//   - resume: misma fila. El chat conserva su historia y el agente su
+//     contexto (el worker arranca con el `resume` del SDK sobre el
+//     sdk_session_id guardado).
+//   - new: sesión nueva. Chat vacío y agente sin contexto.
+function RestartSessionModal({ sid, onClose }: { sid: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState<"resume" | "new" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (mode: "resume" | "new") => {
+    setErr(null);
+    setBusy(mode);
+    try {
+      const r = await api<{ ok: boolean; mode: string; id: string; resumed?: boolean }>(
+        `/api/v1/sessions/${sid}/restart/`,
+        { method: "POST", body: { mode } },
+      );
+      if (r.mode === "new") {
+        window.location.href = `/sessions/${r.id}`;
+        return;
+      }
+      // Refrescar la sesión (status → starting, lo que rearma el polling y
+      // el banner de boot) y el backlog (trae el paso session.restarting).
+      await qc.invalidateQueries({ queryKey: ["session", sid] });
+      await qc.invalidateQueries({ queryKey: ["session-events", sid] });
+      onClose();
+    } catch (e: unknown) {
+      const m = (() => {
+        try { return JSON.parse(String(e)).error ?? String(e); }
+        catch { return String(e); }
+      })();
+      setErr(m);
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Modal open variant="custom" title="Reiniciar sesión" onCancel={onClose}>
+      <p style={{ marginTop: 0, color: "var(--muted)" }}>
+        El modelo y los MCP no se recargan en caliente: hay que rearrancar el
+        worker para que el cambio tenga efecto.
+      </p>
+      <div className="restart-options">
+        <div className="restart-option">
+          <strong>Continuar esta conversación</strong>
+          <p>
+            Rearranca el worker de esta misma sesión. El chat conserva su
+            historia y el agente <strong>mantiene el contexto</strong>, igual
+            que <code>claude --resume</code>.
+          </p>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void run("resume")}
+            disabled={busy !== null}
+          >
+            {busy === "resume" ? "Reiniciando…" : "↻ Reiniciar y continuar"}
+          </button>
+        </div>
+        <div className="restart-option">
+          <strong>Empezar de cero</strong>
+          <p>
+            Para esta sesión y abre una nueva del mismo proyecto: chat vacío y
+            el agente <strong>sin contexto</strong> previo. Esta conversación
+            queda archivada y consultable.
+          </p>
+          <button
+            type="button"
+            onClick={() => void run("new")}
+            disabled={busy !== null}
+          >
+            {busy === "new" ? "Creando…" : "✦ Sesión nueva"}
+          </button>
+        </div>
+      </div>
+      {err && <div className="modal-error">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" onClick={onClose} disabled={busy !== null}>
+          Cancelar
+        </button>
+      </div>
+    </Modal>
   );
 }
 
