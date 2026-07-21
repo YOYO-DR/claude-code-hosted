@@ -13,14 +13,16 @@ seguridad (FASE C.5 checklist MIGRATION1 §4.4):
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, JsonResponse, HttpResponse
 from django.shortcuts import get_object_or_404
-from django.views.decorators.http import require_GET
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET, require_http_methods
 
-from panel.core.models import Project
+from panel.core.models import PermissionPolicy, ModelProfile, Project
 
 from .auth import require_verified_json
 
@@ -354,3 +356,84 @@ def project_git(request: HttpRequest, slug: str) -> JsonResponse:
         "branch": branch_proc.stdout.strip(),
         "dirty": bool(status_proc.stdout.strip()),
     })
+
+# ---- Project edit + archive (UX-T.2) ----
+
+# Campos editables de un Project después de creado.
+# Inmutables a propósito: `slug` (rompe URLs y logs), `path` (filesystem
+# mover de sitio requiere re-clone manual), `status` (se cambia vía archive).
+PROJECT_EDITABLE_FIELDS = (
+    "name",
+    "github_repo",
+    "github_enabled",
+    "telegram_topic_id",
+    "model_profile_id",
+    "permission_policy_id",
+)
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_verified_json
+def project_update(request: HttpRequest, slug: str) -> JsonResponse:
+    """PATCH /api/v1/projects/<slug>/
+    Body JSON con cualquiera de los campos editables. Devuelve el proyecto
+    actualizado. Rechaza campos no editables (slug, path, status) con 400.
+    """
+    p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "json inválido"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "body debe ser objeto JSON"}, status=400)
+    # Defensa: campos inmutables
+    forbidden = {"slug", "path", "status"}.intersection(body.keys())
+    if forbidden:
+        return JsonResponse(
+            {"error": f"campos no editables: {sorted(forbidden)}"},
+            status=400,
+        )
+    # Solo aplicar campos conocidos (ignora extras silenciosamente)
+    fields = [k for k in PROJECT_EDITABLE_FIELDS if k in body]
+    if not fields:
+        return JsonResponse(
+            {"error": f"body vacío; campos válidos: {list(PROJECT_EDITABLE_FIELDS)}"},
+            status=400,
+        )
+    # Validar FK si vienen
+    for fk in ("model_profile_id", "permission_policy_id"):
+        if fk in body and not isinstance(body[fk], int):
+            return JsonResponse({"error": f"{fk} debe ser int"}, status=400)
+    if "model_profile_id" in fields and body["model_profile_id"] is not None:
+        if not ModelProfile.objects.filter(pk=body["model_profile_id"]).exists():
+            return JsonResponse({"error": "model_profile no existe"}, status=400)
+    if "permission_policy_id" in fields and body["permission_policy_id"] is not None:
+        if not PermissionPolicy.objects.filter(pk=body["permission_policy_id"]).exists():
+            return JsonResponse({"error": "permission_policy no existe"}, status=400)
+    for f in fields:
+        setattr(p, f, body[f])
+    p.save(update_fields=fields)
+    return JsonResponse(_serialize_project(p))
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@require_verified_json
+def project_delete(request: HttpRequest, slug: str) -> JsonResponse:
+    """DELETE /api/v1/projects/<slug>/
+    Soft-delete: marca el proyecto como ARCHIVED (filtra de /api/v1/projects/
+    y del UI de selección). 409 si tiene sesiones activas (running/idle/
+    waiting_approval) — primero pararlas.
+    """
+    p = get_object_or_404(Project, slug=slug)
+    active = p.sessions.filter(status__in=("running", "idle", "waiting_approval")).count()
+    if active > 0:
+        return JsonResponse(
+            {"error": f"proyecto tiene {active} sesión(es) activa(s); páralas primero",
+             "active_sessions": active},
+            status=409,
+        )
+    p.status = Project.Status.ARCHIVED
+    p.save(update_fields=["status", "updated_at"])
+    return JsonResponse({"ok": True, "slug": p.slug, "status": p.status})

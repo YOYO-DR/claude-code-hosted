@@ -69,10 +69,13 @@ def ping(profile: ModelProfile, *, timeout: float = 5.0) -> dict:
         "User-Agent": "claude-code-hosted-panel",
     }
     try:
-        r = httpx.get(url, headers=headers, timeout=timeout)
+        # follow_redirects=True: el endpoint base sin trailing / suele
+        # devolver 301 → /v1/messages. Sin seguir redirects, ping devuelve
+        # ok=False con "301 moved permanently" aunque el host sea alcanzable.
+        r = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
     except httpx.HTTPError as exc:
         return {"ok": False, "error": f"error de red: {exc}"}
-    if r.status_code in (200, 201, 204, 400, 401, 403, 404):
+    if r.status_code in (200, 201, 204, 301, 302, 400, 401, 403, 404):
         # 2xx = OK (algunos providers responden 200/204, otros 401 que
         # significa "endpoint alcanzable, auth requerida" = token funciona
         # a nivel de transporte). 4xx = alcanzable pero el token no

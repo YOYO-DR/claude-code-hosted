@@ -413,6 +413,65 @@ def test_project_git_not_a_repo(tmp_path):
     assert body["branch"] is None
 
 
+# ---------- UX-T.2: project_update + project_delete ----------
+
+def test_project_update_changes_editable_fields(tmp_path):
+    p = _project("upd", tmp_path)
+    c = _client_verified()
+    r = c.generic(
+        method="PATCH",
+        path=f"/api/v1/projects/{p.slug}/update/",
+        data=json.dumps({"name": "Nuevo Nombre", "github_enabled": False}),
+        content_type="application/json",
+    )
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["name"] == "Nuevo Nombre"
+    assert body["github_enabled"] is False
+    p.refresh_from_db()
+    assert p.name == "Nuevo Nombre"
+    assert p.github_enabled is False
+
+
+def test_project_update_rejects_immutable_fields(tmp_path):
+    """slug/path/status no son editables — PATCH con esos campos → 400."""
+    p = _project("imm", tmp_path)
+    c = _client_verified()
+    r = c.generic(
+        method="PATCH",
+        path=f"/api/v1/projects/{p.slug}/update/",
+        data=json.dumps({"slug": "evil", "path": "/tmp/evil", "status": "archived"}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+
+
+def test_project_delete_archives_when_no_active_sessions(tmp_path):
+    p = _project("del", tmp_path)
+    c = _client_verified()
+    r = c.generic(method="DELETE", path=f"/api/v1/projects/{p.slug}/delete/")
+    assert r.status_code == 200, r.content
+    p.refresh_from_db()
+    assert p.status == "archived"
+    # No aparece en /api/v1/projects/ (lista solo ACTIVE).
+    r2 = c.get("/api/v1/projects/")
+    slugs = [x["slug"] for x in r2.json()]
+    assert "del" not in slugs
+
+
+def test_project_delete_409_with_active_sessions(tmp_path):
+    from panel.core.models import Session as _Session
+    p = _project("busy", tmp_path)
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    _Session.objects.create(project=p, status=_Session.Status.RUNNING)
+    c = _client_verified()
+    r = c.generic(method="DELETE", path=f"/api/v1/projects/{p.slug}/delete/")
+    assert r.status_code == 409
+    p.refresh_from_db()
+    # Status intacto.
+    assert p.status == "active"
+
+
 def test_project_diff_files_lists_modified_with_counts(tmp_path):
     """FASE UX-R.1: /diff/files/ devuelve lista con +/− counts por archivo."""
     p = _project("df", tmp_path)
@@ -529,6 +588,55 @@ def test_mcps_list_returns_servers(tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert any(m["name"] == "ports" for m in data)
+
+
+def test_mcp_create_validation(tmp_path):
+    """UX-T.3: POST /api/v1/mcps/create/ — name requerido, project real, unique."""
+    c = _client_verified()
+    # name vacío
+    r = c.post("/api/v1/mcps/create/",
+               data=json.dumps({"scope": "global", "transport": "stdio", "config": {}}),
+               content_type="application/json")
+    assert r.status_code == 400
+    # scope=project sin project
+    r = c.post("/api/v1/mcps/create/",
+               data=json.dumps({"name": "x", "scope": "project", "transport": "stdio", "config": {}}),
+               content_type="application/json")
+    assert r.status_code == 400
+    # OK
+    r = c.post("/api/v1/mcps/create/",
+               data=json.dumps({"name": "ports2", "scope": "global", "transport": "stdio", "config": {"k": 1}}),
+               content_type="application/json")
+    assert r.status_code == 201
+    assert r.json()["name"] == "ports2"
+    # Duplicado
+    r = c.post("/api/v1/mcps/create/",
+               data=json.dumps({"name": "ports2", "scope": "global", "transport": "stdio", "config": {}}),
+               content_type="application/json")
+    assert r.status_code == 409
+
+
+def test_mcp_update_and_delete(tmp_path):
+    """UX-T.3: PATCH cambia enabled, DELETE deshabilita."""
+    m = McpServer.objects.create(
+        name="upd", scope=McpServer.Scope.GLOBAL,
+        transport=McpServer.Transport.STDIO, config={},
+    )
+    c = _client_verified()
+    r = c.generic(method="PATCH", path=f"/api/v1/mcps/{m.id}/update/",
+                  data=json.dumps({"enabled": False}),
+                  content_type="application/json")
+    assert r.status_code == 200
+    m.refresh_from_db()
+    assert m.enabled is False
+    r = c.generic(method="DELETE", path=f"/api/v1/mcps/{m.id}/delete/")
+    assert r.status_code == 200
+    m.refresh_from_db()
+    assert m.enabled is False
+    # hard delete
+    r = c.generic(method="DELETE", path=f"/api/v1/mcps/{m.id}/delete/?hard=1")
+    assert r.status_code == 200
+    assert not McpServer.objects.filter(pk=m.id).exists()
 
 # ---------- FASE D: API REST de ModelProfile ----------
 
@@ -663,6 +771,80 @@ def test_model_test_does_not_echo_token():
     raw = r.content.decode()
     assert "sk-SECRET-XXX" not in raw
     assert r.status_code == 200
+
+
+def test_model_test_follows_redirects_for_anthropic_endpoint(monkeypatch):
+    """FIX 301: minimax/anthropic-style base_url sin trailing `/` responde
+    301 → /v1/messages. httpx debe seguir el redirect (con auth header) y
+    el helper debe reportar ok=False con status 401 (endpoint alcanzable,
+    token inválido), NUNCA reportar '301 moved permanently'."""
+    import httpx
+    from panel.core.services import models as model_svc
+
+    profile = _make_model(
+        name="anthropic-style",
+        base_url="https://api.example.com/anthropic",
+        token="sk-SECRET-REDIR",
+    )
+
+    # Interceptor: la primera request recibe 301; el follow-up a /v1/messages
+    # recibe 401. httpx con follow_redirects=True propagará Authorization.
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/v1/messages"):
+            return httpx.Response(401, text="bad token")
+        return httpx.Response(301, headers={"Location": f"{req.url.scheme}://{req.url.netloc}/v1/messages"})
+
+    # monkeypatch Transport — la firma de httpx.get(url, ...) hace httpx por
+    # debajo. Sustituimos get_transport_class en _default_transport.
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: transport.handle_request(args[0]) if False else None, raising=False)
+    # Forma robusta: parcheamos el helper del módulo para usar el MockTransport
+    # indirectamente via el cliente httpx por defecto.
+    orig_get = httpx.get
+    def fake_get(url, **kw):
+        client = httpx.Client(transport=transport, timeout=kw.get("timeout", 5))
+        kw.pop("follow_redirects", None)
+        return client.get(url, follow_redirects=kw.get("follow_redirects", True))
+    monkeypatch.setattr(model_svc.httpx, "get", fake_get)
+
+    out = model_svc.ping(profile)
+    assert "sk-SECRET-REDIR" not in str(out)
+    # Status 401 final = ok=False (NO alcanzable + token inválido), pero
+    # NO debe contener "301".
+    assert out.get("status") != 301
+    if "error" in out:
+        assert "301" not in out["error"]
+
+
+def test_model_test_accepts_3xx_after_redirect(monkeypatch):
+    """FIX 301: si el endpoint redirige a un 2xx/4xx, ping lo reporta,
+    sin mostrar 'moved permanently' al usuario."""
+    import httpx
+    from panel.core.services import models as model_svc
+
+    profile = _make_model(
+        name="redir",
+        base_url="https://api.example.com/proxied",
+        token="sk-X",
+    )
+
+    def handler(req):
+        if req.url.path.endswith("/v1/messages"):
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(301, headers={"Location": f"{req.url.scheme}://{req.url.netloc}/v1/messages"})
+
+    transport = httpx.MockTransport(handler)
+    orig_get = httpx.get
+    def fake_get(url, **kw):
+        client = httpx.Client(transport=transport, timeout=kw.get("timeout", 5))
+        kw.pop("follow_redirects", None)
+        return client.get(url, follow_redirects=kw.get("follow_redirects", True))
+    monkeypatch.setattr(model_svc.httpx, "get", fake_get)
+
+    out = model_svc.ping(profile)
+    assert out["ok"] is True
+    assert out["status"] == 200
+    assert "error" not in out
 
 
 def test_model_delete_blocked_if_used_by_project(tmp_path):

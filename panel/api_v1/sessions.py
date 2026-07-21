@@ -65,20 +65,26 @@ def list_sessions(request: HttpRequest) -> JsonResponse:
 
     # paging
     try:
-        limit = min(max(int(request.GET.get("limit", "200")), 1), 500)
+        limit = min(max(int(request.GET.get("limit", "50")), 1), 200)
     except ValueError:
-        limit = 200
+        limit = 50
     try:
-        offset = max(int(request.GET.get("offset", "0")), 0)
+        page_1 = max(int(request.GET.get("page", "1")), 1)
     except ValueError:
-        offset = 0
+        page_1 = 1
 
     total = qs.count()
+    pages = max(1, (total + limit - 1) // limit)
+    if page_1 > pages:
+        page_1 = pages
+    offset = (page_1 - 1) * limit
+
     page = qs[offset:offset + limit]
     return JsonResponse({
         "total": total,
         "limit": limit,
-        "offset": offset,
+        "page": page_1,
+        "pages": pages,
         "results": [_serialize_session(s) for s in page],
     }, safe=False)
 

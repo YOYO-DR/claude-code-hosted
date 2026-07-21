@@ -18,6 +18,8 @@ urlpatterns = [
     # Projects (+ tree/file/diff FASE C.5)
     path("projects/", projects.list_projects, name="api_v1_projects"),
     path("projects/<slug:slug>/", projects.project_detail, name="api_v1_project_detail"),
+    path("projects/<slug:slug>/update/", projects.project_update, name="api_v1_project_update"),
+    path("projects/<slug:slug>/delete/", projects.project_delete, name="api_v1_project_delete"),
     path("projects/<slug:slug>/tree/", projects.project_tree, name="api_v1_project_tree"),
     path("projects/<slug:slug>/file/", projects.project_file, name="api_v1_project_file"),
     path("projects/<slug:slug>/diff/", projects.project_diff, name="api_v1_project_diff"),
@@ -27,6 +29,9 @@ urlpatterns = [
     path("projects/<slug:slug>/model/", models.set_project_model, name="api_v1_set_project_model"),
     # MCPs
     path("mcps/", mcps.list_mcps, name="api_v1_mcps"),
+    path("mcps/create/", mcps.create_mcp, name="api_v1_mcp_create"),
+    path("mcps/<int:mcp_id>/update/", mcps.update_mcp, name="api_v1_mcp_update"),
+    path("mcps/<int:mcp_id>/delete/", mcps.delete_mcp, name="api_v1_mcp_delete"),
     # GitHub
     path("github/", github.github_info, name="api_v1_github_info"),
     # ModelProfiles (FASE D)

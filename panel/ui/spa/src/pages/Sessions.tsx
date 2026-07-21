@@ -1,7 +1,7 @@
 // Lista de sesiones (UX-S.1) — tabla con filtros server-side + status tags.
 // Consume /api/v1/sessions/?status=&project=&q=&limit=.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
@@ -19,7 +19,8 @@ interface Session {
 interface SessionsResponse {
   total: number;
   limit: number;
-  offset: number;
+  page: number;
+  pages: number;
   results: Session[];
 }
 
@@ -72,16 +73,25 @@ export function SessionsPage() {
   const [filterStatus, setFilterStatus] = useState<string[]>([]);
   const [filterProject, setFilterProject] = useState("");
   const [filterText, setFilterText] = useState("");
+  const [page, setPage] = useState(1);
+
+  // Reset page a 1 cada vez que cambian los filtros para no quedar en página vacía
+  // después de filtrar.
+  const filtersKey = useMemo(
+    () => [filterStatus.join(","), filterProject.trim(), filterText.trim()].join("|"),
+    [filterStatus, filterProject, filterText],
+  );
+  useEffect(() => { setPage(1); }, [filtersKey]);
 
   const queryString = useMemo(() => {
     const sp = new URLSearchParams();
     if (filterStatus.length) sp.set("status", filterStatus.join(","));
     if (filterProject.trim()) sp.set("project", filterProject.trim());
     if (filterText.trim()) sp.set("q", filterText.trim());
-    sp.set("limit", "500");
+    sp.set("page", String(page));
     const q = sp.toString();
     return q ? `?${q}` : "";
-  }, [filterStatus, filterProject, filterText]);
+  }, [filterStatus, filterProject, filterText, page]);
 
   const q = useQuery({
     queryKey: ["sessions", queryString],
@@ -215,6 +225,42 @@ export function SessionsPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {total > 0 && resp && (
+        <div className="pagination">
+          <button
+            onClick={() => setPage(1)}
+            disabled={page <= 1 || q.isFetching}
+            title="Primera página"
+          >
+            «
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1 || q.isFetching}
+          >
+            ‹ Anterior
+          </button>
+          <span className="pagination-info">
+            Página <strong>{resp.page}</strong> de <strong>{resp.pages}</strong>
+            {" · "}
+            <span className="meta">{total} en total</span>
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(resp.pages, p + 1))}
+            disabled={page >= resp.pages || q.isFetching}
+          >
+            Siguiente ›
+          </button>
+          <button
+            onClick={() => setPage(resp.pages)}
+            disabled={page >= resp.pages || q.isFetching}
+            title="Última página"
+          >
+            »
+          </button>
+        </div>
       )}
     </div>
   );
