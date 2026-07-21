@@ -25,9 +25,13 @@ interface ModelProfile {
 
 export function ProjectsPage() {
   const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api<Project[]>("/api/v1/projects/"),
+  const qActive = useQuery({
+    queryKey: ["projects", "active"],
+    queryFn: () => api<Project[]>("/api/v1/projects/?status=active"),
+  });
+  const qArchived = useQuery({
+    queryKey: ["projects", "archived"],
+    queryFn: () => api<Project[]>("/api/v1/projects/?status=archived"),
   });
   const modelsQ = useQuery({
     queryKey: ["models"],
@@ -36,6 +40,9 @@ export function ProjectsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [archiving, setArchiving] = useState<Project | null>(null);
+  // SP4: hard-delete + recreate modales
+  const [purging, setPurging] = useState<Project | null>(null);
+  const [recreating, setRecreating] = useState<Project | null>(null);
 
   const archiveMut = useMutation({
     mutationFn: (slug: string) =>
@@ -53,16 +60,42 @@ export function ProjectsPage() {
         { method: "POST", body: { slug } },
       ),
     onSuccess: (data) => {
+      setStartingSlug(null);
       // Navegar a la sesión creada (o reutilizada) — UX consistente con ▶ Start
       window.location.href = `/sessions/${data.id}`;
     },
   });
   const [startingSlug, setStartingSlug] = useState<string | null>(null);
 
+  const purgeMut = useMutation({
+    mutationFn: (vars: { slug: string; body: Record<string, unknown> }) =>
+      api(`/api/v1/projects/${vars.slug}/delete/`, {
+        method: "POST",
+        body: vars.body,
+      }),
+    onSuccess: () => {
+      setPurging(null);
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
 
-  if (q.isLoading) return <p>Cargando…</p>;
-  if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
-  const data = q.data ?? [];
+  const recreateMut = useMutation({
+    mutationFn: (slug: string) =>
+      api<{ ok: boolean; slug: string }>(
+        `/api/v1/projects/${slug}/recreate/`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      setRecreating(null);
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      // El listado ahora contendrá el nuevo activo con mismo slug.
+    },
+  });
+
+  if (qActive.isLoading) return <p>Cargando…</p>;
+  if (qActive.error) return <p className="msg error">Error: {String(qActive.error)}</p>;
+  const active = qActive.data ?? [];
+  const archived = qArchived.data ?? [];
 
   return (
     <div>
@@ -103,8 +136,9 @@ export function ProjectsPage() {
         >
           <p>
             El proyecto se moverá a <code>archived</code> y dejará de aparecer
-            en esta lista. Sus sesiones ya cerradas siguen registrándose en
-            <code> /sessions/</code> para auditoría.
+            en esta lista (visible en la sección inferior). El dir y las
+            sesiones históricas se preservan para auditoría y para poder
+            <strong> re-clonar</strong> después.
           </p>
           {archiveMut.error && (
             <div className="modal-error">
@@ -137,65 +171,229 @@ export function ProjectsPage() {
           )}
         </Modal>
       )}
+      {purging && (
+        <PurgeProjectModal
+          project={purging}
+          busy={purgeMut.isPending}
+          onCancel={() => setPurging(null)}
+          onConfirm={(body) => purgeMut.mutate({ slug: purging.slug, body })}
+          error={purgeMut.error}
+        />
+      )}
+      {recreating && (
+        <RecreateProjectModal
+          project={recreating}
+          busy={recreateMut.isPending}
+          onCancel={() => setRecreating(null)}
+          onConfirm={() => recreateMut.mutate(recreating.slug)}
+          error={recreateMut.error}
+        />
+      )}
 
-      {data.length === 0 && <p>No hay proyectos.</p>}
-      {data.length > 0 && (
-        <table className="sessions-table">
-          <thead>
-            <tr>
-              <th>Slug</th>
-              <th>Nombre</th>
-              <th>Path</th>
-              <th>GitHub repo</th>
-              <th>Warn</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((p) => (
-              <tr key={p.slug}>
-                <td>
-                  <a href={`/projects/${p.slug}/start/`}>
-                    <code>{p.slug}</code>
-                  </a>
-                </td>
-                <td>{p.name}</td>
-                <td>
-                  <code style={{ fontSize: "0.8em", color: "var(--muted)" }}>
-                    {p.path}
-                  </code>
-                </td>
-                <td>
-                  {p.github_enabled && p.github_repo ? (
-                    <code>{p.github_repo}</code>
-                  ) : (
-                    <span className="meta">—</span>
-                  )}
-                </td>
-                <td>
-                  {p.github_warn_no_push && (
-                    <span className="tag warn">sin push</span>
-                  )}
-                </td>
-                <td style={{ display: "flex", gap: "0.3rem", flexWrap: "nowrap" }}>
-                  <button
-                    onClick={() => { setStartingSlug(p.slug); startMut.mutate(p.slug); }}
-                    disabled={startMut.isPending}
-                    title="Arrancar worker para este proyecto"
-                  >
-                    {startMut.isPending && startingSlug === p.slug ? "…" : "▶ Start"}
-                  </button>
-                  <button onClick={() => setEditing(p)}>Editar</button>
-                  <button className="danger" onClick={() => setArchiving(p)}>
-                    Archivar
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Activos */}
+      <h2 style={{ fontSize: "1.05rem", marginTop: "1rem" }}>Activos</h2>
+      {active.length === 0 ? (
+        <p>No hay proyectos activos.</p>
+      ) : (
+        <ProjectTable
+          rows={active}
+          startMut={startMut}
+          startingSlug={startingSlug}
+          onEdit={setEditing}
+          onArchive={setArchiving}
+          onPurge={setPurging}
+        />
+      )}
+
+      {/* Archivados (SP4): listados aparte, con Re-clonar + Eliminar. */}
+      {archived.length > 0 && (
+        <>
+          <h2 style={{ fontSize: "1.05rem", marginTop: "1.5rem" }}>
+            Archivados
+          </h2>
+          <p style={{ color: "var(--muted)", fontSize: "0.85em", margin: "0 0 0.5rem" }}>
+            Proyectos archivados. Puedes <strong>re-clonar</strong> desde su
+            repo original (se hard-delean y se vuelven a crear) o
+            <strong> eliminar definitivamente</strong>.
+          </p>
+          <ArchivedProjectTable
+            rows={archived}
+            onRecreate={setRecreating}
+            onPurge={setPurging}
+          />
+        </>
       )}
     </div>
+  );
+}
+
+// --- Tabla de proyectos activos (UX-T.5 + SP4 columna estado + purgar) ---
+
+interface ProjectTableProps {
+  rows: Project[];
+  startMut: ReturnType<typeof useMutation<unknown, Error, string>>;
+  startingSlug: string | null;
+  onEdit: (p: Project) => void;
+  onArchive: (p: Project) => void;
+  onPurge: (p: Project) => void;
+}
+
+function ProjectTable({
+  rows,
+  startMut,
+  startingSlug,
+  onEdit,
+  onArchive,
+  onPurge,
+}: ProjectTableProps) {
+  return (
+    <table className="sessions-table">
+      <thead>
+        <tr>
+          <th>Slug</th>
+          <th>Nombre</th>
+          <th>Path</th>
+          <th>GitHub repo</th>
+          <th>Estado</th>
+          <th>Warn</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((p) => (
+          <tr key={p.slug}>
+            <td>
+              <a href={`/projects/${p.slug}/start/`}>
+                <code>{p.slug}</code>
+              </a>
+            </td>
+            <td>{p.name}</td>
+            <td>
+              <code style={{ fontSize: "0.8em", color: "var(--muted)" }}>
+                {p.path}
+              </code>
+            </td>
+            <td>
+              {p.github_enabled && p.github_repo ? (
+                <code>{p.github_repo}</code>
+              ) : (
+                <span className="meta">—</span>
+              )}
+            </td>
+            <td>
+              <StatusTag status={p.status} />
+            </td>
+            <td>
+              {p.github_warn_no_push && (
+                <span className="tag warn">sin push</span>
+              )}
+            </td>
+            <td style={{ display: "flex", gap: "0.3rem", flexWrap: "nowrap" }}>
+              <button
+                onClick={() => startMut.mutate(p.slug)}
+                disabled={startMut.isPending}
+                title="Arrancar worker para este proyecto"
+              >
+                {startMut.isPending && startingSlug === p.slug ? "…" : "▶ Start"}
+              </button>
+              <button onClick={() => onEdit(p)}>Editar</button>
+              <button className="danger" onClick={() => onArchive(p)}>
+                Archivar
+              </button>
+              <button
+                className="danger"
+                onClick={() => onPurge(p)}
+                title="Eliminar definitivamente (hard-delete)"
+                style={{ fontSize: "0.85em" }}
+              >
+                🗑 Purga
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// --- Tabla de proyectos archivados (solo Re-clonar + Purga) ---
+
+function ArchivedProjectTable({
+  rows,
+  onRecreate,
+  onPurge,
+}: {
+  rows: Project[];
+  onRecreate: (p: Project) => void;
+  onPurge: (p: Project) => void;
+}) {
+  return (
+    <table className="sessions-table">
+      <thead>
+        <tr>
+          <th>Slug</th>
+          <th>Nombre</th>
+          <th>GitHub repo</th>
+          <th>Estado</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((p) => (
+          <tr key={p.slug} style={{ opacity: 0.85 }}>
+            <td>
+              <code>{p.slug}</code>
+            </td>
+            <td>{p.name}</td>
+            <td>
+              {p.github_enabled && p.github_repo ? (
+                <code>{p.github_repo}</code>
+              ) : (
+                <span className="meta">—</span>
+              )}
+            </td>
+            <td>
+              <StatusTag status={p.status} />
+            </td>
+            <td style={{ display: "flex", gap: "0.3rem", flexWrap: "nowrap" }}>
+              <button
+                className="primary"
+                onClick={() => onRecreate(p)}
+                title="Hard-delete + re-clonar el repo + nueva fila activa"
+              >
+                ↻ Re-clonar
+              </button>
+              <button
+                className="danger"
+                onClick={() => onPurge(p)}
+                style={{ fontSize: "0.85em" }}
+              >
+                🗑 Purga
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// --- Status chip ---
+
+function StatusTag({ status }: { status: string }) {
+  const palette: Record<string, { bg: string; fg: string; label: string }> = {
+    active: { bg: "#dafbe1", fg: "#1a7f37", label: "active" },
+    archived: { bg: "#ddf4ff", fg: "#0550ae", label: "archived" },
+    deleted: { bg: "#ffebe9", fg: "#cf222e", label: "deleted" },
+  };
+  const s = palette[status] ?? { bg: "#eaeef2", fg: "#57606a", label: status };
+  return (
+    <span
+      className="tag"
+      style={{ background: s.bg, color: s.fg, fontWeight: 600 }}
+    >
+      {s.label}
+    </span>
   );
 }
 
@@ -514,6 +712,149 @@ function EditProjectModal({
         onSubmit={async (data) => { setBusy(true); await updateMut.mutateAsync(data); }}
         onCancel={onCancel}
       />
+    </Modal>
+  );
+}
+
+
+// --- SP4: Hard-delete (purga) — modal con doble confirmación ---
+
+function PurgeProjectModal({
+  project,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  project: Project;
+  busy: boolean;
+  error: unknown;
+  onConfirm: (body: Record<string, unknown>) => void;
+  onCancel: () => void;
+}) {
+  const [purgeSessions, setPurgeSessions] = useState(true);
+  const [purgeFiles, setPurgeFiles] = useState(true);
+  const [confirmSlug, setConfirmSlug] = useState("");
+  const ready = confirmSlug === project.slug;
+
+  return (
+    <Modal open variant="custom" title={`Eliminar definitivamente "${project.slug}"?`} onCancel={onCancel}>
+      <p style={{ color: "var(--err-fg)", fontWeight: 600 }}>
+        ⚠️ Operación destructiva. El proyecto deja de existir para siempre
+        (a menos que lo vuelvas a crear manualmente).
+      </p>
+      <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", margin: "0.4rem 0" }}>
+        <input
+          type="checkbox"
+          checked={purgeSessions}
+          onChange={(e) => setPurgeSessions(e.target.checked)}
+        />
+        Borrar también todas las sesiones históricas (eventos, costos, mensajes)
+      </label>
+      <label style={{ display: "flex", gap: "0.4rem", alignItems: "center", margin: "0.4rem 0" }}>
+        <input
+          type="checkbox"
+          checked={purgeFiles}
+          onChange={(e) => setPurgeFiles(e.target.checked)}
+        />
+        Borrar el directorio en disco
+        <code style={{ fontSize: "0.85em" }}>{project.path}</code>
+      </label>
+      <p style={{ margin: "0.6rem 0 0.3rem" }}>
+        Para confirmar, escribe el slug exacto <code>{project.slug}</code>:
+      </p>
+      <input
+        value={confirmSlug}
+        onChange={(e) => setConfirmSlug(e.target.value)}
+        placeholder={project.slug}
+        autoFocus
+        data-testid="purge-confirm-slug"
+      />
+      {Boolean(error) && (
+        <div className="modal-error" style={{ marginTop: "0.5rem" }}>
+          <p style={{ margin: "0 0 0.5rem" }}>{String((error as Error)?.message ?? error)}</p>
+        </div>
+      )}
+      <div className="modal-actions">
+        <button type="button" onClick={onCancel} disabled={busy}>Cancelar</button>
+        <button
+          type="button"
+          className="danger"
+          disabled={!ready || busy}
+          data-testid="purge-confirm"
+          onClick={() =>
+            onConfirm({
+              hard: true,
+              confirm_slug: project.slug,
+              purge_sessions: purgeSessions,
+              purge_files: purgeFiles,
+            })
+          }
+        >
+          {busy ? "Eliminando…" : "Eliminar definitivamente"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+
+// --- SP4: Re-clonar desde repo (archived/deleted → nuevo active) ---
+
+function RecreateProjectModal({
+  project,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  project: Project;
+  busy: boolean;
+  error: unknown;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal open variant="custom" title={`Re-clonar "${project.slug}"?`} onCancel={onCancel}>
+      <p>
+        Esto <strong>hard-delea</strong> el proyecto actual (sesiones + dir en
+        disco <code>{project.path}</code>) y crea uno <strong>nuevo</strong> con
+        el mismo slug, re-clonando desde su repo original:
+      </p>
+      <ul style={{ margin: "0.3rem 0 0.6rem 1.2rem" }}>
+        <li>
+          Repo:{" "}
+          {project.github_enabled && project.github_repo ? (
+            <code>{project.github_repo}</code>
+          ) : (
+            <em>(ninguno — se hará git init local)</em>
+          )}
+        </li>
+        <li>
+          Rama: <code>agent/{project.slug}</code>
+        </li>
+      </ul>
+      <p style={{ color: "var(--muted)", fontSize: "0.85em" }}>
+        Las sesiones históricas se borran. Si solo quieres conservar el
+        audit log sin tocar nada, usa Archivar (no purga).
+      </p>
+      {Boolean(error) && (
+        <div className="modal-error" style={{ marginTop: "0.5rem" }}>
+          <p style={{ margin: "0 0 0.5rem" }}>{String((error as Error)?.message ?? error)}</p>
+        </div>
+      )}
+      <div className="modal-actions">
+        <button type="button" onClick={onCancel} disabled={busy}>Cancelar</button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          data-testid="recreate-confirm"
+          onClick={onConfirm}
+        >
+          {busy ? "Re-clonando…" : "Re-clonar y arrancar"}
+        </button>
+      </div>
     </Modal>
   );
 }

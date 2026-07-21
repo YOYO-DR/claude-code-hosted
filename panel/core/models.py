@@ -53,6 +53,10 @@ class Project(TimestampedModel):
     class Status(models.TextChoices):
         ACTIVE = "active"
         ARCHIVED = "archived"
+        # SP4: hard-delete con dir+sesiones purgados. Libera el slug para un
+        # recreate posterior. La fila NO se borra (auditoría mínima: nombre +
+        # slug + cuándo se borró). Filtra en /api/v1/projects/ igual que archived.
+        DELETED = "deleted"
 
     slug = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=200)

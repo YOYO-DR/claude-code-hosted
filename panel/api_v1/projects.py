@@ -45,7 +45,17 @@ def _serialize_project(p: Project) -> dict:
 @require_GET
 @require_verified_json
 def list_projects(request: HttpRequest) -> JsonResponse:
-    qs = Project.objects.filter(status=Project.Status.ACTIVE).order_by("slug")
+    """GET /api/v1/projects/?status=active|archived|deleted|all
+    Default: status=active. SP4: la SPA necesita listar archived para
+    mostrar la sección 'Archivados' con acciones de Re-clonar / Eliminar."""
+    qs = Project.objects.all().order_by("slug")
+    status_param = (request.GET.get("status") or "active").strip().lower()
+    if status_param == "all":
+        pass
+    elif status_param in {c.value for c in Project.Status}:
+        qs = qs.filter(status=status_param)
+    else:
+        qs = qs.filter(status=Project.Status.ACTIVE)
     return JsonResponse([_serialize_project(p) for p in qs], safe=False)
 
 
@@ -418,15 +428,31 @@ def project_update(request: HttpRequest, slug: str) -> JsonResponse:
 
 
 @csrf_exempt
-@require_http_methods(["DELETE"])
+@require_http_methods(["DELETE", "POST"])
 @require_verified_json
 def project_delete(request: HttpRequest, slug: str) -> JsonResponse:
-    """DELETE /api/v1/projects/<slug>/
-    Soft-delete: marca el proyecto como ARCHIVED (filtra de /api/v1/projects/
-    y del UI de selección). 409 si tiene sesiones activas (running/idle/
-    waiting_approval) — primero pararlas.
+    """DELETE /api/v1/projects/<slug>/  (o POST con body)
+    Soft-delete (default): marca el proyecto como ARCHIVED. 409 si tiene
+    sesiones activas (running/idle/waiting_approval) — primero pararlas.
+
+    Hard-delete (SP4): body `{"hard": true, "confirm_slug": "<slug>",
+    "purge_sessions": true, "purge_files": true}`. Marca status=DELETED,
+    opcionalmente borra sesiones+eventos y el dir en disco. Libera el slug
+    para un recreate posterior. 400 si `confirm_slug != slug` (defensa
+    contra borrado accidental).
     """
     p = get_object_or_404(Project, slug=slug)
+    # POST legacy + nuevo body parsing (DELETE también lo soporta).
+    if request.method == "DELETE" and not request.body:
+        body: dict = {}
+    else:
+        try:
+            body = json.loads(request.body or b"{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "json inválido"}, status=400)
+        if not isinstance(body, dict):
+            return JsonResponse({"error": "body debe ser objeto JSON"}, status=400)
+    hard = bool(body.get("hard", False))
     active_qs = (
         p.sessions.filter(status__in=("running", "idle", "waiting_approval"))
         .order_by("-created_at")
@@ -446,9 +472,44 @@ def project_delete(request: HttpRequest, slug: str) -> JsonResponse:
             },
             status=409,
         )
-    p.status = Project.Status.ARCHIVED
-    p.save(update_fields=["status", "updated_at"])
-    return JsonResponse({"ok": True, "slug": p.slug, "status": p.status})
+    if not hard:
+        # Soft-delete: comportamiento de antes (FASE 2.5).
+        p.status = Project.Status.ARCHIVED
+        p.save(update_fields=["status", "updated_at"])
+        return JsonResponse({"ok": True, "slug": p.slug, "status": p.status})
+    # SP4: hard-delete con confirm + opciones.
+    confirm = (body.get("confirm_slug") or "").strip()
+    if confirm != slug:
+        return JsonResponse(
+            {"error": f"confirm_slug debe coincidir con '{slug}' (escribiste '{confirm}')"},
+            status=400,
+        )
+    purge_sessions = bool(body.get("purge_sessions", True))
+    purge_files = bool(body.get("purge_files", True))
+    from panel.core.services import provisioning as prov_svc
+    if purge_files:
+        # purge_project ya purga el dir; si no, dejamos el dir intacto.
+        prov_svc.purge_project(p, purge_sessions=purge_sessions)
+    else:
+        # Sin purga de archivos: solo status=DELETED + (opcional) sesiones.
+        for session in Session.objects.filter(project=p).exclude(
+            status__in=[Session.Status.STOPPED, Session.Status.CRASHED]
+        ):
+            from panel.core.services import sessions as session_svc
+            session_svc.stop_session(session)
+        if purge_sessions:
+            Session.objects.filter(project=p).delete()
+        p.status = Project.Status.DELETED
+        p.save(update_fields=["status", "updated_at"])
+        from panel.core.services import privileged
+        privileged.run_render()
+    return JsonResponse({
+        "ok": True,
+        "slug": p.slug,
+        "status": "deleted",
+        "purged_sessions": purge_sessions,
+        "purged_files": purge_files,
+    })
 
 
 # ---- Project create (UX-T.5) ----
@@ -506,7 +567,54 @@ def project_create(request: HttpRequest) -> JsonResponse:
             status=400,
         )
     if Project.objects.filter(slug=slug).exists():
-        return JsonResponse({"error": f"ya existe un proyecto con slug '{slug}'"}, status=409)
+        # SP4: si existe archived/deleted y el cliente manda force_recreate,
+        # delegamos en recreate_project (que hard-delea el viejo + re-clona).
+        existing = Project.objects.filter(slug=slug).first()
+        if existing and existing.status in (
+            Project.Status.ARCHIVED,
+            Project.Status.DELETED,
+        ) and body.get("force_recreate"):
+            from panel.core.services import provisioning as prov_svc
+            try:
+                new = prov_svc.recreate_project(existing)
+            except privileged.ProvisioningError as exc:
+                return JsonResponse({"error": str(exc)}, status=400)
+            except Exception as exc:
+                return JsonResponse(
+                    {"error": f"recreate falló: {exc}"}, status=400,
+                )
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "slug": new.slug,
+                    "path": new.path,
+                    "recreated_from": str(existing.id),
+                    "warnings": (
+                        ["El PAT actual no tiene push sobre este repo."]
+                        if new.github_warn_no_push else []
+                    ),
+                },
+                status=201,
+            )
+        if existing and existing.status in (
+            Project.Status.ARCHIVED,
+            Project.Status.DELETED,
+        ) and not body.get("force_recreate"):
+            return JsonResponse(
+                {
+                    "error": (
+                        f"ya existe un proyecto '{slug}' con status='{existing.status}'; "
+                        "usa POST /api/v1/projects/{slug}/recreate/ o añade "
+                        "`force_recreate: true` para reemplazarlo"
+                    ).format(slug=slug),
+                    "archived_slug": slug,
+                    "recreate_available": True,
+                },
+                status=409,
+            )
+        return JsonResponse(
+            {"error": f"ya existe un proyecto con slug '{slug}'"}, status=409,
+        )
     gh_repo = (body.get("github_repo") or "").strip() or None
     gh_enabled = bool(body.get("github_enabled", False))
     if gh_enabled and not gh_repo:
@@ -592,3 +700,45 @@ def repo_has_bad_shape(repo: str) -> bool:
     if "/" not in repo or repo.count("/") > 1:
         return True
     return False
+
+
+# ---- SP4: recreate desde archived/deleted ----
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_verified_json
+def project_recreate(request: HttpRequest, slug: str) -> JsonResponse:
+    """POST /api/v1/projects/<slug>/recreate/
+    Hard-delea el Project archived/deleted existente (sesiones + dir) y crea
+    uno NUEVO con mismo slug + FKs + github_repo. Re-clona el repo. 404 si
+    no existe el slug. 409 si está active (no se puede recrear algo en uso).
+    """
+    from panel.core.services import provisioning as prov_svc
+    from panel.core.services import privileged
+    p = get_object_or_404(Project, slug=slug)
+    if p.status == Project.Status.ACTIVE:
+        return JsonResponse(
+            {"error": f"proyecto '{slug}' está activo; archívalo primero"},
+            status=409,
+        )
+    try:
+        new = prov_svc.recreate_project(p)
+    except privileged.ProvisioningError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception as exc:
+        return JsonResponse({"error": f"recreate falló: {exc}"}, status=400)
+    return JsonResponse(
+        {
+            "ok": True,
+            "slug": new.slug,
+            "path": new.path,
+            "recreated_from": str(p.id),
+            "warnings": (
+                ["El PAT actual no tiene push sobre este repo."]
+                if new.github_warn_no_push else []
+            ),
+        },
+        status=201,
+    )

@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.test import Client
 
 from panel.core.models import (
+    Event,
     McpServer,
     ModelProfile,
     PermissionPolicy,
@@ -1074,3 +1075,178 @@ def test_start_session_emits_session_created_event(monkeypatch, tmp_path):
         for e in step_evs
     ), "no se persistió session.created"
     assert len(started_with) == 1
+
+
+# --- SP4: hard-delete, recreate, force_recreate, suggestion en 409 ---
+
+def test_project_purge_hard_deletes_db_and_disk(monkeypatch, tmp_path):
+    """SP4: hard-delete con confirm + purge_sessions + purge_files borra
+    la fila (status=DELETED), purga sesiones en cascada y borra el dir."""
+    import shutil
+    from panel.core.services import privileged
+
+    p = _project("purge-me", tmp_path)
+    p.path = str(tmp_path / "purge-me")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    (Path(p.path) / "AGENTS.md").write_text("hi")
+    p.save()
+    s = Session.objects.create(project=p, status=Session.Status.STOPPED)
+
+    monkeypatch.setattr(privileged, "purge_project_files", lambda path: shutil.rmtree(path))
+    monkeypatch.setattr(privileged, "run_render", lambda: None)
+
+    c = _client_verified()
+    r = c.generic(
+        method="POST",
+        path=f"/api/v1/projects/{p.slug}/delete/",
+        data=json.dumps({
+            "hard": True,
+            "confirm_slug": p.slug,
+            "purge_sessions": True,
+            "purge_files": True,
+        }),
+        content_type="application/json",
+    )
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["status"] == "deleted"
+    assert body["purged_sessions"] is True
+    assert body["purged_files"] is True
+    # SP4: la fila se hard-delea (no soft-delete) para liberar el slug.
+    assert not Project.objects.filter(pk=p.pk).exists()
+    assert Session.objects.filter(project=p).count() == 0
+    assert not Path(p.path).exists()
+
+
+def test_project_purge_400_if_confirm_slug_mismatch(tmp_path):
+    """SP4: hard-delete exige confirm_slug == slug — defensa anti-borrado accidental."""
+    import shutil
+    p = _project("safe", tmp_path)
+    p.path = str(tmp_path / "safe")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+    c = _client_verified()
+    r = c.generic(
+        method="POST",
+        path=f"/api/v1/projects/{p.slug}/delete/",
+        data=json.dumps({"hard": True, "confirm_slug": "OTRO", "purge_files": True}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    assert "confirm_slug debe coincidir" in r.json()["error"]
+    p.refresh_from_db()
+    assert p.status == "active"
+    shutil.rmtree(p.path, ignore_errors=True)
+
+
+def test_project_recreate_from_archived_clones_again(monkeypatch, tmp_path):
+    """SP4: recreate hard-delea el archived (sesiones + dir) y crea uno
+    NUEVO con mismo slug + FKs + github_repo. status=active en el nuevo."""
+    import shutil
+    from panel.core.services import privileged
+
+    archived = _project("rec", tmp_path)
+    archived.path = str(tmp_path / "rec")
+    Path(archived.path).mkdir(parents=True, exist_ok=True)
+    archived.status = Project.Status.ARCHIVED
+    archived.github_repo = "owner/rec"
+    archived.github_enabled = True
+    archived.save()
+    Session.objects.create(project=archived, status=Session.Status.STOPPED)
+
+    monkeypatch.setattr(privileged, "purge_project_files", lambda path: shutil.rmtree(path))
+    monkeypatch.setattr(privileged, "run_render", lambda: None)
+    monkeypatch.setattr(privileged, "run_provision", lambda slug, path: Path(path).mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(privileged, "run_clone", lambda *a, **k: None)
+    monkeypatch.setattr(privileged, "write_agents_md", lambda *a, **k: None)
+    from panel.core.services import github as gh_svc
+    monkeypatch.setattr(gh_svc, "has_token", lambda: False)
+    from panel.core.services import telegram as tg
+    monkeypatch.setattr(tg, "create_forum_topic", lambda *a, **k: None)
+
+    c = _client_verified()
+    r = c.post(f"/api/v1/projects/{archived.slug}/recreate/")
+    assert r.status_code == 201, r.content
+    body = r.json()
+    assert body["ok"] is True
+    assert body["slug"] == "rec"
+    # SP4: el viejo se hard-delea (no queda fila archived ni deleted).
+    assert not Project.objects.filter(pk=archived.pk).exists()
+    new = Project.objects.get(slug="rec", status=Project.Status.ACTIVE)
+    assert new.id != archived.id
+    assert new.model_profile_id == archived.model_profile_id
+    assert new.permission_policy_id == archived.permission_policy_id
+    assert new.github_repo == "owner/rec"
+
+
+def test_project_recreate_409_if_active(tmp_path):
+    """SP4: no se puede recrear un proyecto activo (defensa)."""
+    p = _project("active-rec", tmp_path)
+    p.path = str(tmp_path / "active-rec")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+    c = _client_verified()
+    r = c.post(f"/api/v1/projects/{p.slug}/recreate/")
+    assert r.status_code == 409
+    assert "activo" in r.json()["error"]
+
+
+def test_project_create_with_archived_slug_returns_recreate_suggestion(tmp_path):
+    """SP4: POST /create/ con un slug ya archived devuelve 409 con
+    `recreate_available=true` para que la SPA sugiera el botón Re-clonar."""
+    p = _project("dup", tmp_path)
+    p.path = str(tmp_path / "dup")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.status = Project.Status.ARCHIVED
+    p.save()
+    c = _client_verified()
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"name": "Dup", "slug": p.slug}),
+        content_type="application/json",
+    )
+    assert r.status_code == 409
+    body = r.json()
+    assert body["recreate_available"] is True
+    assert body["archived_slug"] == "dup"
+
+
+def test_project_create_force_recreate_calls_recreate(monkeypatch, tmp_path):
+    """SP4: con force_recreate=true, el create delega en recreate_project."""
+    import shutil
+    from panel.core.services import privileged
+
+    archived = _project("rec2", tmp_path)
+    archived.path = str(tmp_path / "rec2")
+    Path(archived.path).mkdir(parents=True, exist_ok=True)
+    archived.status = Project.Status.ARCHIVED
+    archived.github_repo = "owner/rec2"
+    archived.github_enabled = True
+    archived.save()
+
+    monkeypatch.setattr(privileged, "purge_project_files", lambda path: shutil.rmtree(path))
+    monkeypatch.setattr(privileged, "run_render", lambda: None)
+    monkeypatch.setattr(privileged, "run_provision", lambda slug, path: Path(path).mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(privileged, "run_clone", lambda *a, **k: None)
+    monkeypatch.setattr(privileged, "write_agents_md", lambda *a, **k: None)
+    from panel.core.services import github as gh_svc
+    monkeypatch.setattr(gh_svc, "has_token", lambda: False)
+    from panel.core.services import telegram as tg
+    monkeypatch.setattr(tg, "create_forum_topic", lambda *a, **k: None)
+
+    c = _client_verified()
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({
+            "name": "Re-Created",
+            "slug": archived.slug,
+            "force_recreate": True,
+        }),
+        content_type="application/json",
+    )
+    assert r.status_code == 201, r.content
+    body = r.json()
+    assert body["slug"] == "rec2"
+    assert "recreated_from" in body
+    new = Project.objects.get(slug="rec2", status=Project.Status.ACTIVE)
+    assert new.id != archived.id

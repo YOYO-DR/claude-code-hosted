@@ -136,3 +136,75 @@ def archive_project(project: Project) -> None:
     project.save(update_fields=["status", "updated_at"])
     privileged.remove_agents_md(project.path)
     privileged.run_render()
+
+
+def purge_project(project: Project, *, purge_sessions: bool = True) -> None:
+    """SP4: hard-delete. Borra sesiones en cascada, purga el dir en disco, y
+    ELIMINA la fila del proyecto (no soft-delete). El slug queda libre para
+    un recreate. La auditoría mínima (nombre+slug+cuándo) vive en el log de
+    Django (LOGGING → journalctl) + los backups de Postgres.
+
+    Devuelve None. El caller no debe usar la instancia `project` después.
+    """
+    if project.status not in (Project.Status.ARCHIVED, Project.Status.ACTIVE):
+        # Idempotente si ya está borrado.
+        return
+    # Para sesiones activas antes de tocar nada.
+    for session in Session.objects.filter(project=project).exclude(
+        status__in=[Session.Status.STOPPED, Session.Status.CRASHED]
+    ):
+        session_svc.stop_session(session)
+    if purge_sessions:
+        # Cascade: borrar sesiones + eventos + permission requests.
+        Session.objects.filter(project=project).delete()
+    # Purga el dir.
+    privileged.purge_project_files(project.path)
+    # Hard-delete la fila. Capturar pk+slug antes para el audit log.
+    import logging
+    log = logging.getLogger("provisioning")
+    slug = project.slug
+    project_id = project.pk
+    project.delete()
+    log.warning(
+        "project purge: slug=%s id=%s purged_sessions=%s purged_files=True",
+        slug, project_id, purge_sessions,
+    )
+    # Re-render para que las deny lists reflejen el purge.
+    privileged.run_render()
+
+
+def recreate_project(archived: Project) -> Project:
+    """SP4: dado un Project archived (o deleted), crea uno NUEVO con mismo
+    slug + FKs + github_repo. Hard-delea el viejo (incluye sesiones y dir) y
+    re-clona desde el repo original. Devuelve el nuevo (status=active).
+
+    Si el repo no está configurado, hace `git init` local en vez de clone.
+    """
+    if archived.status not in (Project.Status.ARCHIVED, Project.Status.DELETED):
+        raise ValueError(
+            f"solo se puede recrear desde archived/deleted; status={archived.status}"
+        )
+    # Capturar FKs y campos antes del delete (la fila desaparece).
+    snapshot = {
+        "slug": archived.slug,
+        "name": archived.name,
+        "path": archived.path,
+        "model_profile": archived.model_profile,
+        "permission_policy": archived.permission_policy,
+        "github_repo": archived.github_repo,
+        "github_enabled": archived.github_enabled,
+        "github_warn_no_push": archived.github_warn_no_push,
+    }
+    # 1) Purga el viejo: hard-delete de la fila + sesiones + dir.
+    purge_project(archived, purge_sessions=True)
+    # 2) Crea el nuevo (status default ACTIVE).
+    new = Project.objects.create(**snapshot)
+    # 3) Provisiona (clone si hay repo, si no git init local).
+    try:
+        provision_project(new)
+    except privileged.ProvisioningError as exc:
+        # Rollback: borrar la fila nueva + relanzar.
+        new.delete()
+        raise
+    new.refresh_from_db()
+    return new

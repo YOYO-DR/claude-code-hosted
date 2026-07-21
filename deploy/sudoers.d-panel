@@ -6,3 +6,7 @@ panel ALL=(root) NOPASSWD: /usr/bin/systemctl start claude-session@*, /usr/bin/s
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-render.sh
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-provision.sh [a-z0-9-]* /srv/projects/*
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-clone.sh /srv/projects/*
+# SP4: hard-delete del dir de un proyecto. La validación de path está DENTRO
+# del script (case /srv/projects/* + no `..`), pero sudoers lo acota al
+# whitelist como defensa adicional.
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-purge.sh /srv/projects/*

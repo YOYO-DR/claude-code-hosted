@@ -18,6 +18,7 @@ import subprocess
 RENDER_HELPER = "/opt/panel/deploy/panel-render.sh"
 PROVISION_HELPER = "/opt/panel/deploy/panel-provision.sh"
 CLONE_HELPER = "/opt/panel/deploy/panel-clone.sh"
+PURGE_HELPER = "/opt/panel/deploy/panel-purge.sh"
 
 
 class ProvisioningError(RuntimeError):
@@ -108,6 +109,25 @@ def remove_agents_md(path: str) -> None:
         return
     from pathlib import Path
     Path(path, "AGENTS.md").unlink(missing_ok=True)
+
+
+def purge_project_files(path: str) -> None:
+    """SP4: rm -rf del dir de un proyecto. El helper sudo `panel-purge.sh`
+    valida que `path` esté bajo PROJECTS_ROOT y no contenga `..` (defensa
+    anti-path-traversal). Idempotente: si el dir ya no existe, no falla.
+
+    NO se llama desde la ruta normal de archivar (eso preserva el dir para
+    re-clonar barato). Solo desde hard-delete explícito del operador.
+    """
+    if not _is_root() and _can_sudo(PURGE_HELPER):
+        subprocess.run(["sudo", "-n", PURGE_HELPER, path], check=True)
+        return
+    # In-process (root / tests): shutil.rmtree ignora errores para no envenenar
+    # la transacción si algo va mal; pero NO silencia errores de sistema.
+    from pathlib import Path
+    p = Path(path)
+    if p.exists():
+        shutil.rmtree(path)
 
 
 def run_clone(path: str, repo: str, branch: str, token: str) -> None:
