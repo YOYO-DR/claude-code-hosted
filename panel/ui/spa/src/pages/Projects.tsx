@@ -108,7 +108,31 @@ export function ProjectsPage() {
           </p>
           {archiveMut.error && (
             <div className="modal-error">
-              {String(archiveMut.error)}
+              <p style={{ margin: "0 0 0.5rem" }}>
+                {(archiveMut.error as Error).message}
+              </p>
+              {(() => {
+                const body = (archiveMut.error as { body?: { active_sessions?: Array<{ id: string; status: string }> } }).body;
+                const active = body?.active_sessions;
+                if (!active || active.length === 0) return null;
+                return (
+                  <div>
+                    <p style={{ margin: "0 0 0.4rem", fontWeight: 600 }}>
+                      Sesiones que debes parar primero:
+                    </p>
+                    <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+                      {active.map((s) => (
+                        <li key={s.id}>
+                          <a href={`/sessions/${s.id}`} target="_blank" rel="noreferrer">
+                            <code>{s.id.slice(0, 8)}</code>
+                          </a>{" "}
+                          · <span className={`tag status-${s.status}`}>{s.status}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </Modal>

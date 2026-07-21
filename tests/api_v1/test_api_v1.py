@@ -524,16 +524,28 @@ def test_project_delete_archives_when_no_active_sessions(tmp_path):
 
 
 def test_project_delete_409_with_active_sessions(tmp_path):
+    """SP3: el 409 devuelve `active_sessions` con {id, status} para que la
+    SPA muestre enlaces directos a cada sesión activa que debe pararse."""
     from panel.core.models import Session as _Session
     p = _project("busy", tmp_path)
     Path(p.path).mkdir(parents=True, exist_ok=True)
-    _Session.objects.create(project=p, status=_Session.Status.RUNNING)
+    s1 = _Session.objects.create(project=p, status=_Session.Status.RUNNING)
+    _Session.objects.create(project=p, status=_Session.Status.IDLE)
+    # Una sesión vieja stopped — no debe aparecer.
+    _Session.objects.create(project=p, status=_Session.Status.STOPPED)
     c = _client_verified()
     r = c.generic(method="DELETE", path=f"/api/v1/projects/{p.slug}/delete/")
     assert r.status_code == 409
+    body = r.json()
+    assert "sesión(es) activa(s)" in body["error"]
+    assert isinstance(body["active_sessions"], list)
+    assert len(body["active_sessions"]) == 2
+    ids = {a["id"] for a in body["active_sessions"]}
+    statuses = {a["status"] for a in body["active_sessions"]}
+    assert str(s1.id) in ids
+    assert statuses == {"running", "idle"}
     p.refresh_from_db()
-    # Status intacto.
-    assert p.status == "active"
+    assert p.status == "active"  # sin archivar
 
 
 def test_project_diff_files_lists_modified_with_counts(tmp_path):

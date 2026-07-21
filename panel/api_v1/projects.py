@@ -427,11 +427,23 @@ def project_delete(request: HttpRequest, slug: str) -> JsonResponse:
     waiting_approval) — primero pararlas.
     """
     p = get_object_or_404(Project, slug=slug)
-    active = p.sessions.filter(status__in=("running", "idle", "waiting_approval")).count()
-    if active > 0:
+    active_qs = (
+        p.sessions.filter(status__in=("running", "idle", "waiting_approval"))
+        .order_by("-created_at")
+    )
+    if active_qs.exists():
+        active = [
+            {"id": str(s.id), "status": s.status}
+            for s in active_qs
+        ]
         return JsonResponse(
-            {"error": f"proyecto tiene {active} sesión(es) activa(s); páralas primero",
-             "active_sessions": active},
+            {
+                "error": (
+                    f"el proyecto tiene {len(active)} sesión(es) activa(s); "
+                    "páralas primero antes de archivar"
+                ),
+                "active_sessions": active,
+            },
             status=409,
         )
     p.status = Project.Status.ARCHIVED
