@@ -89,6 +89,7 @@ export function GithubPage() {
       {showForm && (
         <Modal
           open
+          variant="custom"
           title={info?.has_token ? "Reemplazar token" : "Configurar token"}
           onCancel={() => setShowForm(false)}
         >

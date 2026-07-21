@@ -268,7 +268,7 @@ function CreateProjectModal({
   // aún endpoint de create en /api/v1, enlazamos al flujo legacy.
   // Esta versión solo cubre edición; el alta se hace vía /admin/.
   return (
-    <Modal open title="Nuevo proyecto" onCancel={onCancel}>
+    <Modal open variant="custom" title="Nuevo proyecto" onCancel={onCancel}>
       <p className="meta">
         La creación de proyectos requiere clonar un repo y provisionar
         CLAUDE.md / .mcp.json — el alta se hace desde{" "}
@@ -313,7 +313,7 @@ function EditProjectModal({
     },
   });
   return (
-    <Modal open title={`Editar "${project.slug}"`} onCancel={onCancel}>
+    <Modal open variant="custom" title={`Editar "${project.slug}"`} onCancel={onCancel}>
       <ProjectFormBody
         initial={{
           name: project.name,

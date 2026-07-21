@@ -226,6 +226,7 @@ function McpFormModal({
   return (
     <Modal
       open
+      variant="custom"
       title={mode === "create" ? "Nuevo MCP" : `Editar MCP "${mcp?.name}"`}
       onCancel={onCancel}
     >

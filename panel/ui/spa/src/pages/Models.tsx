@@ -225,6 +225,7 @@ function ModelFormModal({
   return (
     <Modal
       open
+      variant="custom"
       title={mode === "create" ? "Nuevo modelo" : `Editar "${model?.name}"`}
       onCancel={onCancel}
     >
