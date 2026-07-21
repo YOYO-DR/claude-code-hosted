@@ -15,8 +15,11 @@ urlpatterns = [
     path("sessions/<uuid:sid>/message/", sessions.session_message, name="api_v1_session_message"),
     path("sessions/<uuid:sid>/stop/", sessions.session_stop, name="api_v1_session_stop"),
     path("sessions/<uuid:sid>/events/", sessions.session_events, name="api_v1_session_events"),
+    path("sessions/create/", sessions.session_create, name="api_v1_session_create"),
     # Projects (+ tree/file/diff FASE C.5)
     path("projects/", projects.list_projects, name="api_v1_projects"),
+    path("projects/form-options/", projects.project_form_options, name="api_v1_project_form_options"),
+    path("projects/create/", projects.project_create, name="api_v1_project_create"),
     path("projects/<slug:slug>/", projects.project_detail, name="api_v1_project_detail"),
     path("projects/<slug:slug>/update/", projects.project_update, name="api_v1_project_update"),
     path("projects/<slug:slug>/delete/", projects.project_delete, name="api_v1_project_delete"),

@@ -1,7 +1,7 @@
 // Lista de proyectos (UX-T.2) — tabla con edit + delete + create.
 // Reemplaza el placeholder. Consume /api/v1/projects/ y CRUD endpoints.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Modal } from "@/components/Modal";
@@ -46,6 +46,20 @@ export function ProjectsPage() {
     },
   });
 
+  const startMut = useMutation({
+    mutationFn: (slug: string) =>
+      api<{ ok: boolean; id: string; status: string }>(
+        "/api/v1/sessions/create/",
+        { method: "POST", body: { slug } },
+      ),
+    onSuccess: (data) => {
+      // Navegar a la sesión creada (o reutilizada) — UX consistente con ▶ Start
+      window.location.href = `/sessions/${data.id}`;
+    },
+  });
+  const [startingSlug, setStartingSlug] = useState<string | null>(null);
+
+
   if (q.isLoading) return <p>Cargando…</p>;
   if (q.error) return <p className="msg error">Error: {String(q.error)}</p>;
   const data = q.data ?? [];
@@ -62,6 +76,10 @@ export function ProjectsPage() {
       {showCreate && (
         <CreateProjectModal
           onCancel={() => setShowCreate(false)}
+          onSaved={() => {
+            setShowCreate(false);
+            qc.invalidateQueries({ queryKey: ["projects"] });
+          }}
         />
       )}
       {editing && (
@@ -136,9 +154,13 @@ export function ProjectsPage() {
                   )}
                 </td>
                 <td style={{ display: "flex", gap: "0.3rem", flexWrap: "nowrap" }}>
-                  <a href={`/projects/${p.slug}/start/`}>
-                    <button>▶ Start</button>
-                  </a>
+                  <button
+                    onClick={() => { setStartingSlug(p.slug); startMut.mutate(p.slug); }}
+                    disabled={startMut.isPending}
+                    title="Arrancar worker para este proyecto"
+                  >
+                    {startMut.isPending && startingSlug === p.slug ? "…" : "▶ Start"}
+                  </button>
                   <button onClick={() => setEditing(p)}>Editar</button>
                   <button className="danger" onClick={() => setArchiving(p)}>
                     Archivar
@@ -259,26 +281,168 @@ function ProjectFormBody({
 
 // --- Create + Edit como Modales ---
 
+interface FormOptions {
+  model_profiles: Array<{ id: number; name: string; provider: string }>;
+  permission_policies: Array<{ id: number; name: string; mode: string }>;
+  gh_token_missing: boolean;
+}
+
 function CreateProjectModal({
+  onSaved,
   onCancel,
 }: {
+  onSaved: (slug: string) => void;
   onCancel: () => void;
 }) {
-  // Para crear hace falta POST al endpoint legacy o nuevo. Como no hay
-  // aún endpoint de create en /api/v1, enlazamos al flujo legacy.
-  // Esta versión solo cubre edición; el alta se hace vía /admin/.
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [githubRepo, setGithubRepo] = useState("");
+  const [githubEnabled, setGithubEnabled] = useState(false);
+  const [modelProfileId, setModelProfileId] = useState("");
+  const [permissionPolicyId, setPermissionPolicyId] = useState("");
+  const [telegramTopicId, setTelegramTopicId] = useState("");
+  const [autoSlug, setAutoSlug] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+
+  const optsQ = useQuery({
+    queryKey: ["projects", "form-options"],
+    queryFn: () => api<FormOptions>("/api/v1/projects/form-options/"),
+  });
+
+  // Auto-derive slug from name (kebab-case) hasta que el usuario lo toque.
+  useEffect(() => {
+    if (!autoSlug) return;
+    const derived = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 64);
+    setSlug(derived);
+  }, [name, autoSlug]);
+
+  const ghMissing = optsQ.data?.gh_token_missing ?? false;
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    setWarnings([]);
+    if (!name.trim() || !slug.trim()) {
+      setErr("nombre y slug son requeridos");
+      return;
+    }
+    const body: Record<string, unknown> = {
+      name: name.trim(),
+      slug: slug.trim(),
+    };
+    if (modelProfileId) body.model_profile_id = Number(modelProfileId);
+    if (permissionPolicyId) body.permission_policy_id = Number(permissionPolicyId);
+    if (telegramTopicId.trim()) {
+      const n = Number(telegramTopicId);
+      if (Number.isNaN(n)) return setErr("telegram_topic_id debe ser numérico");
+      body.telegram_topic_id = n;
+    }
+    if (githubEnabled) {
+      if (!githubRepo.trim()) return setErr("github_repo obligatorio si github_enabled");
+      body.github_repo = githubRepo.trim();
+      body.github_enabled = true;
+    }
+    setBusy(true);
+    try {
+      const r = await api<{
+        ok: boolean;
+        slug: string;
+        warnings?: string[];
+      }>("/api/v1/projects/create/", { method: "POST", body });
+      if (r.warnings && r.warnings.length) setWarnings(r.warnings);
+      onSaved(r.slug);
+    } catch (e: unknown) {
+      const m = (() => {
+        try { return JSON.parse(String(e)).error ?? String(e); }
+        catch { return String(e); }
+      })();
+      setErr(m);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Modal open variant="custom" title="Nuevo proyecto" onCancel={onCancel}>
-      <p className="meta">
-        La creación de proyectos requiere clonar un repo y provisionar
-        CLAUDE.md / .mcp.json — el alta se hace desde{" "}
-        <a href="/admin/core/project/add/"><code>/admin/</code></a> o el
-        legacy <a href="/projects/new/">/projects/new/</a> (en desarrollo).
-        Edita uno existente desde la tabla.
-      </p>
-      <div className="modal-actions">
-        <button className="primary" onClick={onCancel}>Cerrar</button>
-      </div>
+      <form onSubmit={submit}>
+        <label>Nombre *</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          maxLength={200}
+          placeholder="Mi Proyecto"
+        />
+        <label>Slug (kebab-case, inmutable) *</label>
+        <input
+          value={slug}
+          onChange={(e) => { setAutoSlug(false); setSlug(e.target.value); }}
+          required
+          pattern="[a-z0-9][a-z0-9-]*"
+          maxLength={64}
+          placeholder="mi-proyecto"
+        />
+        <label>Modelo (ModelProfile)</label>
+        <select value={modelProfileId} onChange={(e) => setModelProfileId(e.target.value)}>
+          <option value="">— sin asignar —</option>
+          {(optsQ.data?.model_profiles ?? []).map((m) => (
+            <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
+          ))}
+        </select>
+        <label>Permission policy</label>
+        <select value={permissionPolicyId} onChange={(e) => setPermissionPolicyId(e.target.value)}>
+          <option value="">— sin asignar —</option>
+          {(optsQ.data?.permission_policies ?? []).map((p) => (
+            <option key={p.id} value={p.id}>{p.name} ({p.mode})</option>
+          ))}
+        </select>
+        <label>
+          <input
+            type="checkbox"
+            checked={githubEnabled}
+            onChange={(e) => setGithubEnabled(e.target.checked)}
+          />{" "}
+          Habilitar GitHub (MCP in-process para el agente)
+        </label>
+        {githubEnabled && (
+          <>
+            <label>GitHub repo (owner/repo)</label>
+            <input
+              value={githubRepo}
+              onChange={(e) => setGithubRepo(e.target.value)}
+              placeholder="owner/repo"
+              required
+            />
+            {ghMissing && (
+              <div className="modal-error">
+                github_enabled=True pero no hay token de GitHub guardado.
+                Ve a <a href="/github">/github</a> y pega uno primero.
+              </div>
+            )}
+          </>
+        )}
+        <label>Telegram topic ID (opcional)</label>
+        <input
+          value={telegramTopicId}
+          onChange={(e) => setTelegramTopicId(e.target.value)}
+          placeholder="opcional"
+        />
+        {err && <div className="modal-error">{err}</div>}
+        {warnings.map((w, i) => (
+          <div key={i} className="msg warning">{w}</div>
+        ))}
+        <div className="modal-actions">
+          <button type="button" onClick={onCancel} disabled={busy}>Cancelar</button>
+          <button type="submit" className="primary" disabled={busy || (githubEnabled && ghMissing)}>
+            {busy ? "Clonando + provisionando…" : "Crear proyecto"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

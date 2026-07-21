@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+
 from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from panel.core import bus
 from panel.core.models import Session
@@ -157,3 +160,46 @@ def session_events(request: HttpRequest, sid: str) -> JsonResponse:
         }
         for e in qs
     ], safe=False)
+
+# ---- UX-T.6: session create from project slug ----
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_verified_json
+def session_create(request: HttpRequest) -> JsonResponse:
+    """POST /api/v1/sessions/create/ body={"slug": "<slug>"}
+    Crea una nueva Session para el proyecto y arranca el worker. Devuelve
+    {ok, id, status} con la sesión creada.
+    409 si el proyecto tiene una sesión activa (running/idle/waiting_approval).
+    400 si slug falta o el proyecto no existe / path inválido.
+    """
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "json inválido"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "body debe ser objeto JSON"}, status=400)
+    slug = (body.get("slug") or "").strip()
+    if not slug:
+        return JsonResponse({"error": "slug requerido"}, status=400)
+    from panel.core.models import Project
+    project = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    if not os.path.isdir(project.path):
+        return JsonResponse(
+            {"error": f"path del proyecto inexistente: {project.path}. Probablemente el clone falló."},
+            status=400,
+        )
+    # Si ya hay una sesión activa, devolvemos 409 y la existing.
+    from panel.core.models import Session
+    existing = project.sessions.filter(
+        status__in=(Session.Status.RUNNING, Session.Status.IDLE, Session.Status.WAITING_APPROVAL)
+    ).order_by("-created_at").first()
+    if existing:
+        return JsonResponse(
+            {"ok": True, "id": str(existing.id), "status": existing.status, "reused": True},
+            status=409,
+        )
+    from panel.core.services import sessions as session_svc
+    s = Session.objects.create(project=project)
+    session_svc.start_session(s)
+    return JsonResponse({"ok": True, "id": str(s.id), "status": s.status}, status=201)

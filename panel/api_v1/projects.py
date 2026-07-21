@@ -437,3 +437,146 @@ def project_delete(request: HttpRequest, slug: str) -> JsonResponse:
     p.status = Project.Status.ARCHIVED
     p.save(update_fields=["status", "updated_at"])
     return JsonResponse({"ok": True, "slug": p.slug, "status": p.status})
+
+
+# ---- Project create (UX-T.5) ----
+
+@require_GET
+@require_verified_json
+def project_form_options(request: HttpRequest) -> JsonResponse:
+    """GET /api/v1/projects/form-options/ — ModelProfiles y PermissionPolicies
+    disponibles para popular el modal de creación en la SPA. Si github_enabled
+    está activo pero no hay token guardado, devuelve flag `gh_token_missing`
+    para que el SPA muestre el error antes de enviar."""
+    from panel.core.models import ModelProfile, PermissionPolicy
+    profiles = [
+        {"id": p.id, "name": p.name, "provider": p.provider}
+        for p in ModelProfile.objects.all().order_by("name")
+    ]
+    policies = [
+        {"id": p.id, "name": p.name, "mode": p.mode}
+        for p in PermissionPolicy.objects.all().order_by("name")
+    ]
+    from panel.core.services import github as gh_svc
+    return JsonResponse({
+        "model_profiles": profiles,
+        "permission_policies": policies,
+        "gh_token_missing": not gh_svc.has_token(),
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_verified_json
+def project_create(request: HttpRequest) -> JsonResponse:
+    """POST /api/v1/projects/create/
+    Body: {name, slug, model_profile_id, permission_policy_id,
+           github_repo?, github_enabled?, telegram_topic_id?}
+    Crea el Project, lanza provision_project (clone/init + render), y
+    devuelve {ok, slug, warnings?}. En caso de ProvisioningError, hace
+    rollback del Project (FASE A.5 / D12) y devuelve 400 con `{error}`.
+    """
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "json inválido"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "body debe ser objeto JSON"}, status=400)
+    name = (body.get("name") or "").strip()
+    slug = (body.get("slug") or "").strip().lower()
+    if not name or not slug:
+        return JsonResponse({"error": "name y slug son requeridos"}, status=400)
+    # validación slug
+    import re as _re
+    if not _re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
+        return JsonResponse(
+            {"error": "slug debe ser kebab-case (a-z, 0-9, guiones)"},
+            status=400,
+        )
+    if Project.objects.filter(slug=slug).exists():
+        return JsonResponse({"error": f"ya existe un proyecto con slug '{slug}'"}, status=409)
+    gh_repo = (body.get("github_repo") or "").strip() or None
+    gh_enabled = bool(body.get("github_enabled", False))
+    if gh_enabled and not gh_repo:
+        return JsonResponse(
+            {"error": "github_repo obligatorio si github_enabled=True"}, status=400,
+        )
+    if gh_enabled and gh_repo:
+        if repo_has_bad_shape(gh_repo):
+            return JsonResponse(
+                {"error": "github_repo debe tener formato owner/repo"}, status=400,
+            )
+        from panel.core.services import github as gh_svc
+        if not gh_svc.has_token():
+            return JsonResponse(
+                {"error": "github_enabled=True pero no hay token guardado. Ve a /github/ primero."},
+                status=400,
+            )
+    # FK opcionales
+    profile = body.get("model_profile_id")
+    policy = body.get("permission_policy_id")
+    topic_id = body.get("telegram_topic_id")
+    from panel.core.models import ModelProfile, PermissionPolicy
+    try:
+        model_profile = ModelProfile.objects.get(pk=profile) if profile else None
+    except ModelProfile.DoesNotExist:
+        return JsonResponse({"error": "model_profile_id no existe"}, status=400)
+    try:
+        permission_policy = PermissionPolicy.objects.get(pk=policy) if policy else None
+    except PermissionPolicy.DoesNotExist:
+        return JsonResponse({"error": "permission_policy_id no existe"}, status=400)
+    # path derivado (no del cliente, server-side para no exponer FS).
+    from django.conf import settings
+    project = Project.objects.create(
+        name=name,
+        slug=slug,
+        path=f"{settings.PROJECTS_ROOT}/{slug}",
+        model_profile=model_profile,
+        permission_policy=permission_policy,
+        github_repo=gh_repo,
+        github_enabled=gh_enabled,
+    )
+    if topic_id is not None:
+        try:
+            project.telegram_topic_id = int(topic_id)
+            project.save(update_fields=["telegram_topic_id", "updated_at"])
+        except (TypeError, ValueError):
+            pass
+    # Provision + rollback ante fallo (D12 / FASE A.5).
+    from panel.core.services import privileged
+    from panel.core.services import provisioning as prov_svc
+    try:
+        prov_svc.provision_project(project)
+    except privileged.ProvisioningError as exc:
+        import shutil, os
+        if os.path.isdir(project.path):
+            shutil.rmtree(project.path, ignore_errors=True)
+        Project.objects.filter(pk=project.pk).delete()
+        return JsonResponse({"error": str(exc)}, status=400)
+    except Exception as exc:
+        import shutil, os
+        if os.path.isdir(project.path):
+            shutil.rmtree(project.path, ignore_errors=True)
+        Project.objects.filter(pk=project.pk).delete()
+        return JsonResponse({"error": f"provisioning falló: {exc}"}, status=400)
+    project.refresh_from_db()
+    warnings = []
+    if project.github_warn_no_push:
+        warnings.append(
+            "Proyecto creado, pero el PAT actual no tiene push sobre este repo. "
+            "`git push`/abrir PR fallarán hasta regenerar el token."
+        )
+    return JsonResponse({
+        "ok": True,
+        "slug": project.slug,
+        "path": project.path,
+        "warnings": warnings,
+    }, status=201)
+
+
+def repo_has_bad_shape(repo: str) -> bool:
+    if repo.startswith(("http://", "https://", "git@")) or repo.endswith(".git"):
+        return True
+    if "/" not in repo or repo.count("/") > 1:
+        return True
+    return False
