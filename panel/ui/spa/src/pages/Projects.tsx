@@ -553,11 +553,15 @@ function CreateProjectModal({
       setErr("nombre y slug son requeridos");
       return;
     }
+    if (!modelProfileId) {
+      setErr("elige un modelo — model_profile_id es requerido");
+      return;
+    }
     const body: Record<string, unknown> = {
       name: name.trim(),
       slug: slug.trim(),
+      model_profile_id: Number(modelProfileId),
     };
-    if (modelProfileId) body.model_profile_id = Number(modelProfileId);
     if (permissionPolicyId) body.permission_policy_id = Number(permissionPolicyId);
     if (telegramTopicId.trim()) {
       const n = Number(telegramTopicId);
@@ -605,13 +609,17 @@ function CreateProjectModal({
           value={slug}
           onChange={(e) => { setAutoSlug(false); setSlug(e.target.value); }}
           required
-          pattern="[a-z0-9][a-z0-9-]*"
+          pattern="[a-z0-9][a-z0-9\-]*"
           maxLength={64}
           placeholder="mi-proyecto"
         />
-        <label>Modelo (ModelProfile)</label>
-        <select value={modelProfileId} onChange={(e) => setModelProfileId(e.target.value)}>
-          <option value="">— sin asignar —</option>
+        <label>Modelo (ModelProfile) *</label>
+        <select
+          value={modelProfileId}
+          onChange={(e) => setModelProfileId(e.target.value)}
+          required
+        >
+          <option value="" disabled>— elige un modelo —</option>
           {(optsQ.data?.model_profiles ?? []).map((m) => (
             <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
           ))}

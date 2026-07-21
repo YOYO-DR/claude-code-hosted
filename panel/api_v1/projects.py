@@ -632,13 +632,19 @@ def project_create(request: HttpRequest) -> JsonResponse:
                 {"error": "github_enabled=True pero no hay token guardado. Ve a /github/ primero."},
                 status=400,
             )
-    # FK opcionales
+    # model_profile_id es OBLIGATORIO — Project.model_profile es FK non-null
+    # (on_delete=PROTECT). Sin esto, Project.objects.create() revienta con
+    # IntegrityError (500 feo). permission_policy sí es opcional (nullable).
     profile = body.get("model_profile_id")
     policy = body.get("permission_policy_id")
     topic_id = body.get("telegram_topic_id")
+    if not profile:
+        return JsonResponse(
+            {"error": "model_profile_id es requerido — elige un modelo"}, status=400,
+        )
     from panel.core.models import ModelProfile, PermissionPolicy
     try:
-        model_profile = ModelProfile.objects.get(pk=profile) if profile else None
+        model_profile = ModelProfile.objects.get(pk=profile)
     except ModelProfile.DoesNotExist:
         return JsonResponse({"error": "model_profile_id no existe"}, status=400)
     try:

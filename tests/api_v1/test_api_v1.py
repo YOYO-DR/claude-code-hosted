@@ -278,6 +278,21 @@ def test_project_create_validates_input(tmp_path):
     assert r.status_code == 400
 
 
+def test_project_create_requires_model_profile_id(tmp_path):
+    """Regresión: Project.model_profile es FK non-null (on_delete=PROTECT).
+    Sin model_profile_id, Project.objects.create() revienta con
+    IntegrityError → 500. Debe rechazarse con 400 legible en su lugar."""
+    c = _client_verified()
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"name": "Sin Modelo", "slug": "sin-modelo"}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    assert "model_profile_id" in r.json()["error"]
+    assert not Project.objects.filter(slug="sin-modelo").exists()
+
+
 def test_project_create_form_options_returns_profiles_and_policies(tmp_path):
     """UX-T.5: /form-options/ lista ModelProfile y PermissionPolicy."""
     c = _client_verified()
