@@ -293,6 +293,24 @@ def test_project_create_requires_model_profile_id(tmp_path):
     assert not Project.objects.filter(slug="sin-modelo").exists()
 
 
+def test_project_create_requires_permission_policy_id(tmp_path):
+    """Regresión: Project.permission_policy también es FK non-null. Con
+    model_profile_id presente pero sin permission_policy_id, debe seguir
+    rechazando con 400 (no 500) antes de tocar la DB."""
+    mp = _profile("mp-for-policy-test")
+    c = _client_verified()
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({
+            "name": "Sin Policy", "slug": "sin-policy", "model_profile_id": mp.id,
+        }),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    assert "permission_policy_id" in r.json()["error"]
+    assert not Project.objects.filter(slug="sin-policy").exists()
+
+
 def test_project_create_form_options_returns_profiles_and_policies(tmp_path):
     """UX-T.5: /form-options/ lista ModelProfile y PermissionPolicy."""
     c = _client_verified()

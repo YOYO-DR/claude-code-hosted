@@ -557,12 +557,16 @@ function CreateProjectModal({
       setErr("elige un modelo — model_profile_id es requerido");
       return;
     }
+    if (!permissionPolicyId) {
+      setErr("elige una permission policy — permission_policy_id es requerido");
+      return;
+    }
     const body: Record<string, unknown> = {
       name: name.trim(),
       slug: slug.trim(),
       model_profile_id: Number(modelProfileId),
+      permission_policy_id: Number(permissionPolicyId),
     };
-    if (permissionPolicyId) body.permission_policy_id = Number(permissionPolicyId);
     if (telegramTopicId.trim()) {
       const n = Number(telegramTopicId);
       if (Number.isNaN(n)) return setErr("telegram_topic_id debe ser numérico");
@@ -624,9 +628,13 @@ function CreateProjectModal({
             <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
           ))}
         </select>
-        <label>Permission policy</label>
-        <select value={permissionPolicyId} onChange={(e) => setPermissionPolicyId(e.target.value)}>
-          <option value="">— sin asignar —</option>
+        <label>Permission policy *</label>
+        <select
+          value={permissionPolicyId}
+          onChange={(e) => setPermissionPolicyId(e.target.value)}
+          required
+        >
+          <option value="" disabled>— elige una policy —</option>
           {(optsQ.data?.permission_policies ?? []).map((p) => (
             <option key={p.id} value={p.id}>{p.name} ({p.mode})</option>
           ))}
