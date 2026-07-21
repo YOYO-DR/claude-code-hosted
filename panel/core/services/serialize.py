@@ -83,6 +83,23 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def serialize_session_step(sid: str, step: str, message: str) -> dict[str, Any]:
+    """UIEvent v1 session_status emitido por el panel durante el ciclo de
+    vida de la sesión (no por el SDK). Lo consume la SPA para mostrar
+    timeline de boot y deshabilitar el chat hasta que el worker esté listo.
+    Mantener sincronizado con panel/ui/spa/src/types/uievents.ts."""
+    from datetime import UTC, datetime
+
+    return {
+        "v": 1,
+        "seq": 0,  # lo sobreescribe persist_event al guardar
+        "session_id": sid,
+        "ts": datetime.now(UTC).isoformat(),
+        "kind": "session_status",
+        "payload": {"status": step, "message": message},
+    }
+
+
 def serialize_message(msg: Any) -> dict[str, Any]:
     """Devuelve el payload JSON-safe del mensaje (sin el `seq`, que lo pone el
     worker al persistir)."""

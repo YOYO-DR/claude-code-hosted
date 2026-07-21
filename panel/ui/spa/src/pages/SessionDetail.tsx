@@ -9,7 +9,7 @@
 // - agrupado de deltas sin tool_use_id reusando la última key de stream
 //   del mismo kind (vía streamState ref)
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
@@ -172,6 +172,42 @@ export function SessionPage() {
   const streamRef = useRef<StreamState>({ key: null, kind: null });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bubblesRef = useRef<Bubble[]>([]);
+
+  // SP2: reintento automático del session-detail mientras siga en STARTING
+  // para detectar el flip a RUNNING/IDLE sin esperar al WS. Backoff: 2s.
+  useEffect(() => {
+    const status = sessQ.data?.status;
+    if (status !== "starting") return;
+    const t = setInterval(() => {
+      sessQ.refetch();
+    }, 2000);
+    return () => clearInterval(t);
+  }, [sessQ.data?.status, sessQ]);
+
+  // SP2: extrae el último paso de boot emitido por el panel/worker para
+  // mostrar timeline y deshabilitar el input hasta que el worker esté listo.
+  const bootStep = useMemo(() => {
+    // 1) Cualquier session_status cuyo status NO sea 'running' ni 'idle'
+    //    se considera un paso de boot (panel: session.created / worker.scheduled;
+    //    worker: 'init', etc.).
+    // 2) session_status con status='running' o 'idle' => listo.
+    // 3) El primer run_result también cuenta como listo (turno terminó).
+    let latestBoot: string | null = null;
+    let ready = false;
+    for (const ev of eventsQ.data ?? []) {
+      const t = ev.type;
+      const payload = (ev.ui_event?.payload ?? ev.payload ?? {}) as Record<string, unknown>;
+      if (t === "session_status" || t === "session_step") {
+        const s = String(payload.status ?? "");
+        if (s === "running" || s === "idle") { ready = true; continue; }
+        if (s === "starting") continue;
+        latestBoot = String(payload.message ?? s);
+      }
+      if (t === "result" || t === "run_result") ready = true;
+      if (t === "agent_text" || t === "user" || t === "tool_call") ready = true;
+    }
+    return { latestBoot, ready };
+  }, [eventsQ.data]);
 
   // Mantener ref sincronizada con bubbles (para usar dentro del WS onEvent
   // sin provocar re-renders innecesarios).
@@ -354,6 +390,18 @@ export function SessionPage() {
               />
             ))}
           </div>
+          {/* SP2: banner de progreso mientras el worker arranca. El input se
+              deshabilita hasta que el worker haya emitido su primer evento
+              real (session_status=running o primer agent_text). Evita que el
+              usuario mande mensajes a un worker que aún no existe. */}
+          {sess.status === "starting" && !bootStep.ready && (
+            <div className="boot-banner" data-testid="boot-banner">
+              <span className="boot-spinner" aria-hidden="true">⏳</span>
+              <span>
+                {bootStep.latestBoot ?? "Programando worker…"}
+              </span>
+            </div>
+          )}
           <form
             className="input-bar"
             onSubmit={(e) => {
@@ -368,9 +416,20 @@ export function SessionPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={sendOnEnter}
-              placeholder="Mensaje al agente (Ctrl/Cmd+Enter)"
+              placeholder={
+                sess.status === "starting" && !bootStep.ready
+                  ? "Esperando que el worker esté listo…"
+                  : "Mensaje al agente (Ctrl/Cmd+Enter)"
+              }
+              disabled={sess.status === "starting" && !bootStep.ready}
+              data-testid="chat-input"
             />
-            <button type="submit" className="primary" disabled={sendMut.isPending}>
+            <button
+              type="submit"
+              className="primary"
+              disabled={sendMut.isPending || (sess.status === "starting" && !bootStep.ready)}
+              data-testid="chat-send"
+            >
               Enviar
             </button>
           </form>
@@ -508,7 +567,11 @@ function BubbleView({
     case "session_status":
       return (
         <div className="bubble session-status">
-          session_status: <code>{String(p.status ?? "")}</code>
+          {p.message ? (
+            <span>{String(p.message)}</span>
+          ) : (
+            <>session_status: <code>{String(p.status ?? "")}</code></>
+          )}
           {p.model ? <> · model=<code>{String(p.model)}</code></> : null}
         </div>
       );

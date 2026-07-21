@@ -17,6 +17,7 @@ from panel.core.models import (
     Session,
 )
 from panel.core.services import permissions as perm_svc
+from workers import supervisor
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -239,6 +240,69 @@ def test_sessions_list_ignores_invalid_status(tmp_path):
     # Filtró solo por "idle" (válido); "bogus" se descarta.
     assert body["total"] == 1
     assert body["results"][0]["id"] == str(s.id)
+
+
+def test_project_create_validates_input(tmp_path):
+    """UX-T.5: /api/v1/projects/create/ rechaza input inválido."""
+    c = _client_verified()
+    # name vacío / slug vacío
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"slug": "ab"}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    # slug con caracteres prohibidos
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"name": "X", "slug": "BAD slug!"}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    # github_enabled sin repo
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"name": "X", "slug": "ok-slug", "github_enabled": True}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+    # repo con formato malo
+    r = c.post(
+        "/api/v1/projects/create/",
+        data=json.dumps({"name": "X", "slug": "ok-slug-2",
+                         "github_enabled": True,
+                         "github_repo": "https://github.com/owner/repo.git"}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400
+
+
+def test_project_create_form_options_returns_profiles_and_policies(tmp_path):
+    """UX-T.5: /form-options/ lista ModelProfile y PermissionPolicy."""
+    c = _client_verified()
+    r = c.get("/api/v1/projects/form-options/")
+    assert r.status_code == 200
+    body = r.json()
+    assert "model_profiles" in body
+    assert "permission_policies" in body
+    assert "gh_token_missing" in body
+
+
+def test_session_create_requires_slug(tmp_path):
+    """UX-T.6: /api/v1/sessions/create/ body requiere slug."""
+    c = _client_verified()
+    r = c.post("/api/v1/sessions/create/",
+               data=json.dumps({}),
+               content_type="application/json")
+    assert r.status_code == 400
+
+
+def test_session_create_404_for_unknown_slug(tmp_path):
+    c = _client_verified()
+    r = c.post("/api/v1/sessions/create/",
+               data=json.dumps({"slug": "nonexistent-project-xyz"}),
+               content_type="application/json")
+    assert r.status_code == 404
 
 
 def test_projects_list(tmp_path):
@@ -908,3 +972,93 @@ def test_grep_token_does_not_appear_anywhere():
                   data=json.dumps({"name": "grep-mp2"}),
                   content_type="application/json")
     assert secret not in r.content.decode()
+
+
+# --- SP2: session_create ya no duplica filas y hace rollback ante fallo del worker ---
+
+def test_session_create_no_duplicate_row_on_success(monkeypatch, tmp_path):
+    """SP2: session_create NO debe crear dos filas. Antes creaba una huérfana
+    porque hacía Session.objects.create + luego start_session() que creaba otra.
+    Ahora session_create delega TODO a start_session → una sola fila."""
+    p = _project("no-dup", tmp_path)
+    p.path = str(tmp_path / "no-dup")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+
+    started = []
+    def fake_start(sid):
+        started.append(sid)
+    monkeypatch.setattr(supervisor, "start", fake_start)
+
+    rows_before = Session.objects.filter(project=p).count()
+    c = _client_verified()
+    r = c.post("/api/v1/sessions/create/",
+               data=json.dumps({"slug": p.slug}),
+               content_type="application/json")
+    assert r.status_code == 201, r.content
+    rows_after = Session.objects.filter(project=p).count()
+    assert rows_after - rows_before == 1, f"se esperaba 1 fila nueva, hay {rows_after - rows_before}"
+    assert len(started) == 1
+    # El id devuelto debe coincidir con la única fila creada.
+    assert str(Session.objects.filter(project=p).latest("created_at").id) == r.json()["id"]
+
+
+def test_session_create_rolls_back_when_supervisor_fails(monkeypatch, tmp_path):
+    """SP2: si supervisor.start lanza SupervisorError, session_create debe
+    hacer rollback (borrar la fila) y devolver 502 con error legible, NO 500."""
+    p = _project("rollback", tmp_path)
+    p.path = str(tmp_path / "rollback")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+
+    def fake_start(sid):
+        raise supervisor.SupervisorError("start rollback falló: unit not found")
+    monkeypatch.setattr(supervisor, "start", fake_start)
+
+    rows_before = Session.objects.filter(project=p).count()
+    c = _client_verified()
+    r = c.post("/api/v1/sessions/create/",
+               data=json.dumps({"slug": p.slug}),
+               content_type="application/json")
+    rows_after = Session.objects.filter(project=p).count()
+    assert rows_after == rows_before, "rollback falló: la fila zombie quedó en DB"
+    assert r.status_code == 502, f"se esperaba 502, fue {r.status_code}"
+    body = r.json()
+    assert "no pude arrancar el worker" in body["error"]
+    assert "rollback falló" in body["error"]
+
+
+def test_start_session_emits_session_created_event(monkeypatch, tmp_path):
+    """SP2: start_session publica un UIEvent session_step con status
+    'session.created' ANTES de supervisor.start, para que el cliente vea
+    feedback inmediato."""
+    p = _project("emit", tmp_path)
+    p.path = str(tmp_path / "emit")
+    Path(p.path).mkdir(parents=True, exist_ok=True)
+    p.save()
+
+    started_with: list[str] = []
+    def fake_start(sid):
+        started_with.append(sid)
+    monkeypatch.setattr(supervisor, "start", fake_start)
+
+    # Capturar publishes a Redis.
+    from panel.core.services import events as event_svc
+    published: list[tuple[str, object]] = []
+    class FakeRedis:
+        def publish(self, channel, payload):
+            published.append((channel, payload))
+        def close(self):
+            pass
+    monkeypatch.setattr(event_svc, "publish_event", lambda r, sid, ev: r.publish("ch", ev))
+
+    from panel.core.services import sessions as session_svc
+    session = session_svc.start_session(p)
+
+    # Debe haber al menos 1 evento session_step.session.created persistido.
+    step_evs = list(session.events.filter(type="session_step"))
+    assert any(
+        (e.ui_event or {}).get("payload", {}).get("status") == "session.created"
+        for e in step_evs
+    ), "no se persistió session.created"
+    assert len(started_with) == 1

@@ -1,9 +1,16 @@
 """Ciclo de vida de sesiones desde el panel: crear la fila, arrancar el worker,
-pararlo. El worker real corre en su propia unidad systemd (claude-session@)."""
+pararlo. El worker real corre en su propia unidad systemd (claude-session@).
+
+SP2: `start_session` es la única ruta que materializa una Session y arranca
+el worker en ese orden. Si `supervisor.start` falla, borramos la fila y
+relanzamos `SupervisorError` para que la vista devuelva 502 con mensaje
+legible (antes: 500 silencioso + fila huérfana en STARTING para siempre).
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 
 import redis
 from django.conf import settings
@@ -16,15 +23,58 @@ from panel.core.models import McpServer, Project, Session
 from panel.core.services import permissions as perm_svc
 from workers import supervisor
 
+log = logging.getLogger("sessions")
+
 
 def _redis() -> redis.Redis:
     return redis.from_url(settings.REDIS_URL)
 
 
 def start_session(project: Project) -> Session:
+    """Crea la Session en STARTING, arranca el worker y publica un evento
+    `session_status` para que la SPA muestre progreso. Si el arranque del
+    worker falla (sido/no reproducible), hace rollback: borra la fila y
+    relanza `SupervisorError` con el stderr original.
+    """
     session = Session.objects.create(project=project, status=Session.Status.STARTING)
-    supervisor.start(str(session.id))
+    # SP2: emitir evento ANTES de supervisor.start para que el cliente vea
+    # "session created" incluso si el systemctl tarda en arrancar.
+    _emit_session_step(session, "session.created", "Sesión creada, programando worker…")
+    try:
+        supervisor.start(str(session.id))
+    except supervisor.SupervisorError:
+        # Rollback duro: borrar la fila para no dejar un zombie en STARTING.
+        log.exception("supervisor.start falló para %s — rollback fila", session.id)
+        Session.objects.filter(pk=session.pk).delete()
+        raise
+    _emit_session_step(session, "worker.scheduled", "Worker programado, arrancando…")
     return session
+
+
+def _emit_session_step(session: Session, step: str, message: str) -> None:
+    """Publica un UIEvent session_status con el paso actual del boot. Best-effort:
+    si Redis está caído, persiste igual en DB para que la SPA lo lea vía backlog."""
+    from panel.core.services import events as event_svc
+    from panel.core.services.serialize import serialize_session_step
+
+    payload = {"status": step, "message": message}
+    ui_event = serialize_session_step(str(session.id), step, message)
+    # seq ficticio 0 → la persistencia lo asignará vía initial_seq si fuera
+    # el primero, pero aquí ya hay eventos de provision si los hubo.
+    try:
+        seq = event_svc.initial_seq(session)
+    except Exception:  # noqa: BLE001
+        seq = 1
+    ev = event_svc.persist_event(
+        session, seq, "session_step", payload, ui_event=ui_event,
+    )
+    if ev is not None:
+        try:
+            r = _redis()
+            event_svc.publish_event(r, str(session.id), ev)
+            r.close()
+        except redis.RedisError:
+            log.warning("Redis caído; paso %s no publicado en vivo", step)
 
 
 def stop_session(session: Session) -> None:

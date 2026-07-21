@@ -248,6 +248,33 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 .bubble.run-result { border-left-color: #2da44e; font-weight: 600; }
 .bubble.run-result.error { border-left-color: var(--err-fg); color: var(--err-fg); }
 .bubble.session-status, .bubble.git-branch { opacity: 0.7; }
+
+/* SP2: banner de progreso mientras el worker arranca. Se muestra sobre el
+   input-bar para que el usuario sepa qué está pasando antes de poder enviar
+   mensajes. Animación suave para indicar que NO está colgado. */
+.boot-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  background: #ddf4ff;
+  color: #0550ae;
+  border-left: 3px solid #54aeff;
+  font-size: 0.9em;
+}
+.boot-banner .boot-spinner {
+  animation: boot-spin 1.4s linear infinite;
+  display: inline-block;
+}
+@keyframes boot-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.input-bar textarea:disabled,
+.input-bar button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .bubble.error { border-left-color: var(--err-fg); background: var(--err-bg); color: var(--err-fg); }
 .bubble.user {
   border-left-color: #0969da;

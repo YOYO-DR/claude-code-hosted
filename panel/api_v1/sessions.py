@@ -172,6 +172,8 @@ def session_create(request: HttpRequest) -> JsonResponse:
     {ok, id, status} con la sesión creada.
     409 si el proyecto tiene una sesión activa (running/idle/waiting_approval).
     400 si slug falta o el proyecto no existe / path inválido.
+    502 si systemctl falla al arrancar el worker (con rollback de la fila
+    para no dejar zombies en STARTING — SP2).
     """
     try:
         body = json.loads(request.body or b"{}")
@@ -199,7 +201,16 @@ def session_create(request: HttpRequest) -> JsonResponse:
             {"ok": True, "id": str(existing.id), "status": existing.status, "reused": True},
             status=409,
         )
+    # SP2: una sola fila. `start_session` la crea Y arranca el worker.
+    # Si el arranque falla, start_session hace rollback y propaga
+    # SupervisorError → devolvemos 502 con el stderr del systemctl.
     from panel.core.services import sessions as session_svc
-    s = Session.objects.create(project=project)
-    session_svc.start_session(s)
+    from workers import supervisor
+    try:
+        s = session_svc.start_session(project)
+    except supervisor.SupervisorError as exc:
+        return JsonResponse(
+            {"error": f"no pude arrancar el worker: {exc}. Vuelve a intentarlo; si persiste, revisa los sudoers del panel."},
+            status=502,
+        )
     return JsonResponse({"ok": True, "id": str(s.id), "status": s.status}, status=201)

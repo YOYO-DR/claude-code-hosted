@@ -129,3 +129,32 @@ TELEGRAM_USER_IDS = [
     int(x) for x in _env("PANEL_TELEGRAM_USER_IDS", "").replace(" ", "").split(",") if x
 ]
 PUBLIC_BASE_URL = _env("PANEL_PUBLIC_BASE_URL", "https://claude-code-hosted.yoyodr.dev")
+
+# SP2: logger a stderr para que uvicorn/systemd lo recojan en journalctl.
+# Sin esto los 500 de Django se quedan silenciosos (Django default no
+# escribe a ningún handler) y no podemos diagnosticar fallos como el de
+# la sesión 020726dd.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+            "formatter": "verbose",
+        },
+    },
+    "root": {"handlers": ["console"], "level": _env("PANEL_LOG_LEVEL", "INFO")},
+    "loggers": {
+        "django.request": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "sessions": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "provisioning": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
