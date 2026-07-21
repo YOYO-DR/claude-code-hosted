@@ -997,6 +997,38 @@ def test_set_project_model_changes_model(tmp_path):
     assert proj.model_profile_id == new.id
 
 
+def test_set_project_model_400_with_wrong_key_model_id(tmp_path):
+    """SP5 regresión: SPA SessionDetail.tsx enviaba model_id en vez de
+    model_profile_id → 400 'model_profile_id requerido' al cambiar modelo.
+    La API documenta model_profile_id; cualquier otra key debe dar 400."""
+    old = _make_model(name="key-old")
+    new = _make_model(name="key-new")
+    proj = _project("keymismatch", tmp_path)
+    proj.model_profile = old
+    proj.save(update_fields=["model_profile", "updated_at"])
+    c = _client_verified()
+    # La key incorrecta (model_id) — lo que la SPA enviaba antes del fix.
+    r = c.post(
+        f"/api/v1/projects/{proj.slug}/model/",
+        data=json.dumps({"model_id": new.id}),
+        content_type="application/json",
+    )
+    assert r.status_code == 400, r.content
+    assert "model_profile_id" in r.json()["error"]
+    # El proyecto NO cambió (defensa contra daño colateral).
+    proj.refresh_from_db()
+    assert proj.model_profile_id == old.id
+    # La key correcta debe funcionar (positive control).
+    r2 = c.post(
+        f"/api/v1/projects/{proj.slug}/model/",
+        data=json.dumps({"model_profile_id": new.id}),
+        content_type="application/json",
+    )
+    assert r2.status_code == 200, r2.content
+    proj.refresh_from_db()
+    assert proj.model_profile_id == new.id
+
+
 def test_grep_token_does_not_appear_anywhere():
     """Test 'grep exhaustivo': crear un perfil con un token único, hacer
     GET/POST/PATCH/DELETE/test y verificar que el token NUNCA aparece

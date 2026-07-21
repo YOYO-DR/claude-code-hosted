@@ -640,7 +640,7 @@ function ModelSelector({ slug }: { slug: string }) {
     mutationFn: (modelId: number) =>
       api(`/api/v1/projects/${slug}/model/`, {
         method: "POST",
-        body: { model_id: modelId },
+        body: { model_profile_id: modelId },
       }),
     onSuccess: (data) => {
       const d = data as { needs_restart?: boolean };
