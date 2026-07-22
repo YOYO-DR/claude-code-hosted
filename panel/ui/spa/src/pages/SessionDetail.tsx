@@ -111,12 +111,16 @@ function ingestEvent(
   if (!msg.ui_event) return { next: prev, stream };
   const ui = msg.ui_event;
   const { key, nextStream } = computeGroupKey(msg, ui, turnId, stream);
-  // tool_result → actualiza el tool_call existente
+  // tool_result → adjunta el resultado al tool_call existente SIN pisar su
+  // `ui` (antes se ponía ui.kind="tool_result", y como BubbleView devuelve
+  // null para tool_result, el bubble del tool_call desaparecía al llegar su
+  // resultado — no se veía la llamada. Ahora se conserva el tool_call y el
+  // resultado se muestra anidado vía ToolResultView).
   if (ui.kind === "tool_result") {
     const idx = prev.findIndex((b) => b.groupKey === key && b.kind === "tool_call");
     if (idx >= 0) {
       const copy = prev.slice();
-      copy[idx] = { ...copy[idx], result: msg, ui: { ...ui, kind: "tool_result" } };
+      copy[idx] = { ...copy[idx], result: msg };
       return { next: copy, stream: nextStream };
     }
     // tool_call aún no ha llegado → crear bubble tool_result igual
