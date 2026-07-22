@@ -178,38 +178,41 @@ class Worker:
         cierre del SDK, etc.), se loguea una vez y se sale silencioso. La
         SPA consume el último válido sin reintentar.
         """
-        import asyncio as _aio
         from panel.core.events.normalize import UIEvent
         warned = False
         while not self._stop.is_set():
+            resp = None
             try:
-                # get_context_usage es síncrono y habla con el CLI process;
-                # correrlo en default_executor evita bloquear el event loop.
-                loop = _aio.get_event_loop()
-                resp = await loop.run_in_executor(
-                    None, lambda: self._client.get_context_usage() if self._client else None,
-                )
-                if resp is None:
-                    return
-                payload = {
-                    "total_tokens": int(resp.get("totalTokens", 0)),
-                    "max_tokens": int(resp.get("maxTokens", 0)),
-                    "percentage": float(resp.get("percentage", 0.0)),
-                    "model": str(resp.get("model", "")),
-                }
-                ue = UIEvent(
-                    v=1, seq=0, session_id=str(session.id),
-                    ts="", kind="context_usage",
-                    payload=payload,
-                )
-                self._redis_publish_ui(ue.to_dict())
+                if self._client is not None:
+                    # get_context_usage es ASYNC (devuelve coroutine),
+                    # contrario a lo que el nombre sugiere — descubrir
+                    # este bug costó un round-trip al log del worker.
+                    resp = await self._client.get_context_usage()
             except Exception as exc:  # noqa: BLE001
                 if not warned:
                     log.warning("context_usage poll falló (se silencia): %s", exc)
                     warned = True
+            if resp is not None:
+                try:
+                    payload = {
+                        "total_tokens": int(resp.get("totalTokens", 0)),
+                        "max_tokens": int(resp.get("maxTokens", 0)),
+                        "percentage": float(resp.get("percentage", 0.0)),
+                        "model": str(resp.get("model", "")),
+                    }
+                    ue = UIEvent(
+                        v=1, seq=0, session_id=str(session.id),
+                        ts="", kind="context_usage",
+                        payload=payload,
+                    )
+                    self._redis_publish_ui(ue.to_dict())
+                except Exception as exc:  # noqa: BLE001
+                    if not warned:
+                        log.warning("context_usage publish falló (se silencia): %s", exc)
+                        warned = True
             try:
-                await _aio.wait_for(self._stop.wait(), timeout=CONTEXT_USAGE_INTERVAL)
-            except _aio.TimeoutError:
+                await asyncio.wait_for(self._stop.wait(), timeout=CONTEXT_USAGE_INTERVAL)
+            except asyncio.TimeoutError:
                 pass
 
     async def _loop(self, session: Session, client: ClaudeSDKClient) -> None:
