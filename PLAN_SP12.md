@@ -10,13 +10,29 @@
 - [x] **Parte 3 — Render suave** (fade/slide, cursor parpadeante, scroll suave, reduced-motion ✅)
 - [x] **Parte 4 — Máx. contexto + umbral auto-compact por modelo** (modelo+migración+API+worker+form+barra ✅)
 - [x] **Parte 5 — Menú `/` de comandos** (worker `slash_commands` + popup SPA ejecutar-al-elegir ✅)
-- [ ] **Deploy + E2E** (migrate, build SPA, restart; validar en vivo con Playwright)
+- [x] **Deploy + E2E** (migrate 0007 aplicada, SPA build, restart; validado en vivo con Playwright ✅)
 
-> Código completo. Backend verde (240 tests), `tsc --noEmit` verde, `vite build` verde (`index-ADQgt4z_.js`).
+> Código completo + desplegado + validado E2E. Backend verde (240 tests), `tsc`+`vite build` verde.
 > Fuente de comandos `/`: `get_server_info()` del init (no `slashCommands` del context-usage, que es solo un
-> resumen de tokens). Migración `0007`. Bonus: arreglado el freeze latente de la barra de contexto (los
-> efímeros seq=0 ya no pasan por el dedup del componente).
-> Pendiente E2E-gated: (4b) que el CLI realmente compacte en el umbral; (5) qué built-ins ejecuta el SDK.
+> resumen de tokens). Migración `0007`.
+>
+> **Causa dominante del "se pierden mensajes al recargar"**: NO era solo el truncado `ui_events[0]` (eso afecta
+> a modelos multi-bloque tipo Anthropic). Con MiniMax (mensajes de un bloque) el culpable principal era el
+> merge de `tool_result` en `ingestEvent`, que pisaba `bubble.ui.kind="tool_result"` → BubbleView devolvía
+> null → **el tool_call desaparecía al llegar su resultado** (en vivo y al recargar). Fix: conservar el ui del
+> tool_call, mostrar el resultado anidado. Commit `92a6a66`.
+>
+> **Validación E2E en vivo** (sesión cc2b1359, MiniMax-M3):
+> - Recarga: la conversación COMPLETA persiste — 2 tool calls Read (uno ERROR "Invalid pages", uno OK
+>   "E2E_OK_..."), thinking, agent_text, run_result. Antes desaparecían.
+> - Menú `/`: popup con comandos reales (/verify, /code-review, /deep-research, /debug…), ejecuta al elegir.
+> - Barra de contexto: `22.1k/200k (11%)` + marcador `⚡84%` (umbral derivado del SDK en vivo).
+> - Form de modelos: campos Máx. contexto + Umbral auto-compact visibles.
+> - Bonus: arreglado el freeze latente de la barra (efímeros seq=0 ya no pasan por el dedup del componente).
+>
+> Commits: `8fa750d` (SP12) + `92a6a66` (fix tool_call render).
+> Pendiente E2E-gated (no bloqueante): (4b) que el CLI realmente compacte en el umbral configurado; (5) qué
+> built-ins ejecuta el SDK al enviarlos.
 
 ---
 
