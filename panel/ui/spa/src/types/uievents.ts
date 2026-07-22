@@ -15,6 +15,7 @@ export type UIEventKind =
   | "run_result"
   | "session_status"
   | "git_branch"
+  | "context_usage"
   | "user"
   | "error";
 
@@ -83,6 +84,12 @@ export interface SessionStatusPayload {
 export interface GitBranchPayload {
   branch: string;
   dirty: boolean;
+}
+export interface ContextUsagePayload {
+  total_tokens: number;
+  max_tokens: number;
+  percentage: number;
+  model: string;
 }
 export interface ErrorPayload {
   message: string;

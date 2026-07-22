@@ -44,11 +44,8 @@ from panel.core.services.model_env import render_env  # noqa: E402
 
 log = logging.getLogger("session_worker")
 HEARTBEAT_INTERVAL = 5  # segundos
-
-DENY_MSG = (
-    "Permiso denegado por el operador. No reintentes esta acción; continúa con "
-    "lo que no la requiera o documenta el bloqueo en NOTES.md."
-)
+CONTEXT_USAGE_INTERVAL = 10  # segundos (más caro que heartbeat, va al SDK)
+CONTEXT_USAGE_INTERVAL = 10  # segundos (más caro que heartbeat, va al SDK)
 TIMEOUT_MSG = (
     "La solicitud de aprobación expiró sin respuesta. Continúa con lo que no "
     "requiera este permiso o deja el trabajo limpio y documentado en NOTES.md."
@@ -145,7 +142,13 @@ class Worker:
         try:
             async with ClaudeSDKClient(options=options) as client:
                 connected = True
-                await self._loop(session, client)
+                self._client = client
+                ctx_task = asyncio.create_task(self._poll_context_usage(session))
+                try:
+                    await self._loop(session, client)
+                finally:
+                    ctx_task.cancel()
+                    self._client = None
         except Exception:
             if connected or not options.resume:
                 raise
@@ -154,13 +157,60 @@ class Worker:
             )
             await sync_to_async(self._clear_sdk_session)(session)
             async with ClaudeSDKClient(options=replace(options, resume=None)) as client:
-                await self._loop(session, client)
+                self._client = client
+                ctx_task = asyncio.create_task(self._poll_context_usage(session))
+                try:
+                    await self._loop(session, client)
+                finally:
+                    ctx_task.cancel()
+                    self._client = None
 
     def _clear_sdk_session(self, session: Session) -> None:
         """Olvida el id del SDK que no se pudo reanudar para que el próximo
         arranque no vuelva a intentarlo."""
         session.sdk_session_id = None
         session.save(update_fields=["sdk_session_id", "updated_at"])
+
+    async def _poll_context_usage(self, session: Session) -> None:
+        """SP11: emite UIEvent `context_usage {totalTokens, maxTokens,
+        percentage, model}` cada CONTEXT_USAGE_INTERVAL. Best-effort: si
+        `get_context_usage()` falla (CLI no soporta aún el flag, race con
+        cierre del SDK, etc.), se loguea una vez y se sale silencioso. La
+        SPA consume el último válido sin reintentar.
+        """
+        import asyncio as _aio
+        from panel.core.events.normalize import UIEvent
+        warned = False
+        while not self._stop.is_set():
+            try:
+                # get_context_usage es síncrono y habla con el CLI process;
+                # correrlo en default_executor evita bloquear el event loop.
+                loop = _aio.get_event_loop()
+                resp = await loop.run_in_executor(
+                    None, lambda: self._client.get_context_usage() if self._client else None,
+                )
+                if resp is None:
+                    return
+                payload = {
+                    "total_tokens": int(resp.get("totalTokens", 0)),
+                    "max_tokens": int(resp.get("maxTokens", 0)),
+                    "percentage": float(resp.get("percentage", 0.0)),
+                    "model": str(resp.get("model", "")),
+                }
+                ue = UIEvent(
+                    v=1, seq=0, session_id=str(session.id),
+                    ts="", kind="context_usage",
+                    payload=payload,
+                )
+                self._redis_publish_ui(ue.to_dict())
+            except Exception as exc:  # noqa: BLE001
+                if not warned:
+                    log.warning("context_usage poll falló (se silencia): %s", exc)
+                    warned = True
+            try:
+                await _aio.wait_for(self._stop.wait(), timeout=CONTEXT_USAGE_INTERVAL)
+            except _aio.TimeoutError:
+                pass
 
     async def _loop(self, session: Session, client: ClaudeSDKClient) -> None:
         while not self._stop.is_set():

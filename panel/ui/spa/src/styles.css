@@ -190,6 +190,34 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
   max-height: 60vh;
   overflow-y: auto;
 }
+
+/* ---------- SP11: barra de contexto debajo del input-bar ---------- */
+.ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--border);
+  background: var(--card-bg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.75em;
+  color: var(--muted);
+}
+.ctx-bar-label { opacity: 0.75; }
+.ctx-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.ctx-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.6s ease, background 0.3s ease;
+}
+.ctx-bar-numbers { white-space: nowrap; }
 .chat {
   border: 1px solid var(--border);
   border-radius: 8px;

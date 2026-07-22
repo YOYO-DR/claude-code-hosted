@@ -219,6 +219,13 @@ export function SessionPage() {
     return { latestBoot, ready };
   }, [eventsQ.data]);
 
+  // SP11: context_usage es UIEvent efímero (no se persiste en BD). Solo
+  // llega por WS vía _redis_publish_ui. Lo capturamos en un state efímero
+  // y lo renderizamos como una barra debajo del input-bar, NO como bubble
+  // (no compite por espacio con la conversación).
+  const [ctxLive, setCtxLive] = useState<{ total: number; max: number; pct: number; model: string } | null>(null);
+  const ctx = ctxLive;
+
   // Mantener ref sincronizada con bubbles (para usar dentro del WS onEvent
   // sin provocar re-renders innecesarios).
   useEffect(() => {
@@ -264,6 +271,19 @@ export function SessionPage() {
         onEvent: (msg) => {
           if (seenSeq.current.has(msg.seq)) return;
           seenSeq.current.add(msg.seq);
+          // SP11: context_usage es efímero (no se persiste) — va a estado aparte.
+          if (msg.ui_event?.kind === "context_usage") {
+            const p = msg.ui_event.payload as {
+              total_tokens?: number; max_tokens?: number; percentage?: number; model?: string;
+            };
+            setCtxLive({
+              total: Number(p.total_tokens ?? 0),
+              max: Number(p.max_tokens ?? 0),
+              pct: Number(p.percentage ?? 0),
+              model: String(p.model ?? ""),
+            });
+            return;
+          }
           setBubbles((prev) => {
             const out = ingestEvent(prev, msg, streamRef.current);
             streamRef.current = out.stream;
@@ -476,6 +496,26 @@ export function SessionPage() {
               Enviar
             </button>
           </form>
+          {/* SP11: indicador de contexto debajo del input-bar. Efímero:
+              lo emite el worker cada ~10s via WS; si no llega nada, no se
+              dibuja. No compite con la conversación por espacio. */}
+          {ctx && ctx.max > 0 && (
+            <div className="ctx-bar" data-testid="ctx-bar" title={ctx.model}>
+              <span className="ctx-bar-label">contexto</span>
+              <div className="ctx-bar-track">
+                <div
+                  className="ctx-bar-fill"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, ctx.pct))}%`,
+                    background: ctx.pct >= 90 ? "var(--err-fg)" : ctx.pct >= 70 ? "#e3b341" : "var(--accent)",
+                  }}
+                />
+              </div>
+              <span className="ctx-bar-numbers">
+                {(ctx.total / 1000).toFixed(1)}k / {(ctx.max / 1000).toFixed(0)}k ({ctx.pct.toFixed(0)}%)
+              </span>
+            </div>
+          )}
         </section>
 
         <aside style={{ display: "grid", gap: "0.5rem" }}>
