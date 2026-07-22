@@ -140,6 +140,9 @@ class Worker:
         self._auto_compact_threshold: int | None = None
         # SP12: la lista de comandos `/` se emite una sola vez (viene del init).
         self._slash_emitted = False
+        # SP12: loguear la respuesta cruda de get_context_usage una sola vez
+        # (verificar qué reporta el CLI para max/umbral de auto-compact).
+        self._ctx_logged = False
 
     async def run(self) -> None:
         session = await self._load_session()
@@ -224,6 +227,15 @@ class Worker:
                 if not warned:
                     log.warning("context_usage poll falló (se silencia): %s", exc)
                     warned = True
+            if resp is not None and not self._ctx_logged:
+                self._ctx_logged = True
+                log.info(
+                    "context_usage RAW: maxTokens=%s rawMaxTokens=%s percentage=%s "
+                    "autoCompactThreshold=%s isAutoCompactEnabled=%s",
+                    resp.get("maxTokens"), resp.get("rawMaxTokens"),
+                    resp.get("percentage"), resp.get("autoCompactThreshold"),
+                    resp.get("isAutoCompactEnabled"),
+                )
             if resp is not None:
                 try:
                     total = int(resp.get("totalTokens", 0))
@@ -576,6 +588,15 @@ class Worker:
         # SP12: contexto por modelo para la barra + marcador de auto-compact.
         self._max_context_tokens = profile.max_context_tokens
         self._auto_compact_threshold = profile.auto_compact_threshold
+        # SP12 (4b): aplicar al CLI REAL, no solo al display. El Claude Code CLI
+        # lee estos env (verificado en el binario empaquetado):
+        #   CLAUDE_CODE_MAX_CONTEXT_TOKENS  → tope de contexto en tokens
+        #   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE → umbral % de auto-compact
+        # setdefault: extra_env del modelo sigue pudiendo pisarlos (escotilla).
+        if profile.max_context_tokens:
+            env.setdefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", str(int(profile.max_context_tokens)))
+        if profile.auto_compact_threshold:
+            env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", str(int(profile.auto_compact_threshold)))
         approve = policy.mode == "approve"
         mode: PermissionMode = "default" if approve else "bypassPermissions"
         # MCP de puertos in-process (§4.5): tokens/DB nunca a disco. Las tools
