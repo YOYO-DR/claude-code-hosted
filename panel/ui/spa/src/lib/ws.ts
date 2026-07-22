@@ -102,6 +102,22 @@ export function openSessionWs(
           if (seenPermIds.has(permId)) return;
           seenPermIds.add(permId);
         } else {
+          // SP11: eventos efímeros publicados via _redis_publish_ui (git_branch,
+          // context_usage) llegan con seq=0 por conveniencia — NO son parte del
+          // stream y NO deben competir con el dedup del consumer. Si los
+          // metemos por seenSeq con seq=0, el SeqDedup del BACKEND los
+          // descarta en el primer publish (seenSeq empieza en last_seq=0).
+          // Los reenviamos siempre; el cliente decide si filtrar en
+          // onEvent por kind. idem para cualquier seq que no avanza.
+          const isEphemeral =
+            data.seq === 0 ||
+            data.ui_event?.kind === "context_usage" ||
+            data.ui_event?.kind === "git_branch" ||
+            data.type === "ui_delta";
+          if (isEphemeral) {
+            handlers.onEvent(data);
+            return;
+          }
           if (seenSeq.has(data.seq)) return;
           seenSeq.add(data.seq);
           if (data.seq > lastSeq) lastSeq = data.seq;
