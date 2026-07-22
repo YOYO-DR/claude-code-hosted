@@ -45,7 +45,10 @@ from panel.core.services.model_env import render_env  # noqa: E402
 log = logging.getLogger("session_worker")
 HEARTBEAT_INTERVAL = 5  # segundos
 CONTEXT_USAGE_INTERVAL = 10  # segundos (más caro que heartbeat, va al SDK)
-CONTEXT_USAGE_INTERVAL = 10  # segundos (más caro que heartbeat, va al SDK)
+DENY_MSG = (
+    "Permiso denegado por el operador. No reintentes esta acción; continúa con "
+    "lo que no la requiera o documenta el bloqueo en NOTES.md."
+)
 TIMEOUT_MSG = (
     "La solicitud de aprobación expiró sin respuesta. Continúa con lo que no "
     "requiera este permiso o deja el trabajo limpio y documentado en NOTES.md."
