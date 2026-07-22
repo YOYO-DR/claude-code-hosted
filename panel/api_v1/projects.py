@@ -14,6 +14,7 @@ seguridad (FASE C.5 checklist MIGRATION1 §4.4):
 from __future__ import annotations
 
 import json
+import mimetypes
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,15 @@ from .auth import require_verified_json
 
 MAX_FILE_BYTES = 100 * 1024  # 100 KB
 BINARY_SNIFF_BYTES = 8192
+MAX_RAW_BYTES = 25 * 1024 * 1024  # 25 MB — tope para imágenes del visor
+# Allowlist de extensiones servibles como raw. Defensa en profundidad: aunque
+# el path ya está validado por _safe_resolve, NO servimos binarios arbitrarios
+# (un .exe o .so renombrado no debe escaparse por aquí). El cliente SPA
+# determina la extensión; el servidor la revalida.
+RAW_IMAGE_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+    ".bmp", ".ico", ".avif", ".heic", ".heif",
+}
 
 
 def _serialize_project(p: Project) -> dict:
@@ -164,6 +174,51 @@ def project_file(request: HttpRequest, slug: str) -> JsonResponse:
         "truncated": truncated,
         "content": content,
     })
+
+
+@require_GET
+@require_verified_json
+def project_raw(request: HttpRequest, slug: str) -> HttpResponse:
+    """GET /api/v1/projects/<slug>/raw?path=<rel>
+
+    Sirve el contenido crudo de un archivo de imagen para el visor del SPA.
+    Reuso la misma validación de path traversal que `project_file`. Allowlist
+    de extensiones (RAW_IMAGE_EXTS) — un .exe renombrado a .png NO pasa el
+    check final de extensión; el servidor siempre manda application/octet-stream
+    si el tipo no se reconoce, pero igualmente está restringido al allowlist.
+    """
+    p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
+    rel = request.GET.get("path")
+    if not rel:
+        return JsonResponse({"error": "path requerido"}, status=400)
+    try:
+        target = _safe_resolve(p, rel)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
+    if not target.exists() or not target.is_file():
+        return JsonResponse({"error": "archivo no existe"}, status=404)
+    # Allowlist por extensión (case-insensitive). Si no encaja, 403.
+    if target.suffix.lower() not in RAW_IMAGE_EXTS:
+        return JsonResponse({"error": "tipo no soportado"}, status=403)
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return JsonResponse({"error": "no se pudo leer"}, status=500)
+    if size > MAX_RAW_BYTES:
+        return JsonResponse({"error": "imagen demasiado grande"}, status=413)
+    ctype, _ = mimetypes.guess_type(str(target))
+    try:
+        with open(target, "rb") as f:
+            data = f.read()
+    except OSError:
+        return JsonResponse({"error": "no se pudo leer"}, status=500)
+    resp = HttpResponse(data, content_type=ctype or "application/octet-stream")
+    # Cache corto: el archivo puede cambiar en disco (git pull, edita el
+    # agente), pero el nombre completo del path basta como key. Sin caché
+    # agresivo: el dev recarga manual.
+    resp["Cache-Control"] = "private, max-age=60"
+    resp["Content-Length"] = str(len(data))
+    return resp
 
 
 @require_GET

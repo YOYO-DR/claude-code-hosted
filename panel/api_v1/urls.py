@@ -27,6 +27,7 @@ urlpatterns = [
     path("projects/<slug:slug>/recreate/", projects.project_recreate, name="api_v1_project_recreate"),
     path("projects/<slug:slug>/tree/", projects.project_tree, name="api_v1_project_tree"),
     path("projects/<slug:slug>/file/", projects.project_file, name="api_v1_project_file"),
+    path("projects/<slug:slug>/raw/", projects.project_raw, name="api_v1_project_raw"),
     path("projects/<slug:slug>/diff/", projects.project_diff, name="api_v1_project_diff"),
     path("projects/<slug:slug>/diff/files/", projects.project_diff_files, name="api_v1_project_diff_files"),
     path("projects/<slug:slug>/diff/file/", projects.project_diff_file, name="api_v1_project_diff_file"),

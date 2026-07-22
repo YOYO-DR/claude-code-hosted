@@ -1,9 +1,22 @@
 // Componentes del panel lateral: árbol de archivos, visor, diff.
 // FASE C.5 — consumen /api/v1/projects/<slug>/{tree,file,diff}.
+// Imágenes se sirven vía /raw/ y se abren en ImageModal con zoom.
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { ImageModal } from "./ImageModal";
+
+// Allowlist de extensiones que se renderizan como imagen. Coincide con
+// RAW_IMAGE_EXTS del backend; si se desincroniza, el backend responderá 403
+// y el modal mostrará un error limpio.
+const IMAGE_EXTS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif", "heic", "heif",
+]);
+function isImage(name: string): boolean {
+  const i = name.lastIndexOf(".");
+  return i >= 0 && IMAGE_EXTS.has(name.slice(i + 1).toLowerCase());
+}
 
 interface TreeEntry {
   name: string;
@@ -33,6 +46,9 @@ function fmtSize(b: number): string {
 export function ProjectTree({ slug }: { slug: string }) {
   const [cwd, setCwd] = useState(".");
   const [selected, setSelected] = useState<string | null>(null);
+  // Imagen actualmente abierta en el modal. Si coincide con `selected`, el
+  // usuario hizo click en una imagen en el árbol y la verá en grande.
+  const [imageModal, setImageModal] = useState<{ path: string; size: number } | null>(null);
 
   const tree = useQuery({
     queryKey: ["tree", slug, cwd],
@@ -43,7 +59,7 @@ export function ProjectTree({ slug }: { slug: string }) {
   const file = useQuery({
     queryKey: ["file", slug, selected],
     queryFn: () => api<File>(`/api/v1/projects/${slug}/file/?path=${encodeURIComponent(selected!)}`),
-    enabled: !!selected,
+    enabled: !!selected && !imageModal,
   });
 
   const onPickEntry = (e: TreeEntry) => {
@@ -52,9 +68,18 @@ export function ProjectTree({ slug }: { slug: string }) {
       const next = cwd === "." ? e.name : `${cwd}/${e.name}`;
       setCwd(next);
       setSelected(null);
+      setImageModal(null);
     } else {
       const next = cwd === "." ? e.name : `${cwd}/${e.name}`;
-      setSelected(next);
+      if (isImage(e.name)) {
+        // Imágenes: NO cargar /file/ (que solo devuelve metadata para
+        // binarios); abrir directamente el modal con la URL al endpoint raw.
+        setSelected(next);
+        setImageModal({ path: next, size: e.size });
+      } else {
+        setImageModal(null);
+        setSelected(next);
+      }
     }
   };
 
@@ -64,6 +89,7 @@ export function ProjectTree({ slug }: { slug: string }) {
     parts.pop();
     setCwd(parts.join("/") || ".");
     setSelected(null);
+    setImageModal(null);
   };
 
   return (
@@ -86,9 +112,10 @@ export function ProjectTree({ slug }: { slug: string }) {
               key={e.name}
               style={{ cursor: "pointer", padding: "0.2rem 0.4rem" }}
               onClick={() => onPickEntry(e)}
+              title={isImage(e.name) ? `${e.name} — click para ver` : undefined}
             >
               <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.9em" }}>
-                {e.is_dir ? "📁" : "📄"} {e.name}
+                {e.is_dir ? "📁" : isImage(e.name) ? "🖼️" : "📄"} {e.name}
               </span>
               {!e.is_dir && <span className="meta" style={{ marginLeft: "0.4rem" }}>{fmtSize(e.size)}</span>}
             </li>
@@ -96,7 +123,7 @@ export function ProjectTree({ slug }: { slug: string }) {
         </ul>
       )}
 
-      {selected && (
+      {selected && !imageModal && (
         <div style={{ marginTop: "0.5rem" }}>
           <div className="meta">📄 {selected}</div>
           {file.isLoading && <p className="meta">Cargando…</p>}
@@ -111,6 +138,17 @@ export function ProjectTree({ slug }: { slug: string }) {
             </pre>
           )}
         </div>
+      )}
+
+      {imageModal && (
+        <ImageModal
+          open={true}
+          src={`/api/v1/projects/${slug}/raw/?path=${encodeURIComponent(imageModal.path)}`}
+          alt={imageModal.path}
+          filename={imageModal.path.split("/").pop() || imageModal.path}
+          sizeBytes={imageModal.size}
+          onClose={() => setImageModal(null)}
+        />
       )}
     </div>
   );

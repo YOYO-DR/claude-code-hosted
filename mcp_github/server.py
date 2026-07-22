@@ -2,7 +2,12 @@
 D9): el token vive en memoria del worker (desde la BD cifrada), nunca en disco
 del proyecto. Ligado al `github_repo` del proyecto: el agente solo opera sobre SU
 repo. Expone abrir PR / push / listar / comentar — **NO merge** (así los agentes
-no pueden mergear aunque el token pueda; el candado duro es branch protection)."""
+no pueden mergear aunque el token pueda; el candado duro es branch protection).
+
+`open_pull_request` acepta un parámetro opcional `base` para indicar la rama
+destino del PR (ej. `develop`). Si se omite, se usa la rama por defecto del repo
+(NO siempre es `main` — la consultamos vía la API). Esto permite PRs de revisión
+contra `develop` sin que el operador tenga que tocar nada."""
 
 from __future__ import annotations
 
@@ -25,25 +30,38 @@ def _err(msg: str) -> dict:
 def build_server(repo_full_name: str, dest: str, token: str):
     """MCP 'github' ligado a un repo/dir/token concretos."""
 
-    def _push_and_pr(title: str, body: str) -> dict:
+    def _push_and_pr(title: str, body: str, base_override: str | None) -> dict:
         branch = gh.current_branch(dest)
         gh.push(token, dest, branch)
-        base = gh.default_branch(token, repo_full_name)
+        # Si el agente no indicó base, usamos la rama por defecto del repo
+        # (puede ser `main`, `master`, `develop`, la que sea — la consultamos
+        # vía /repos/:owner/:repo para no asumir).
+        base = base_override.strip() if base_override and base_override.strip() else gh.default_branch(token, repo_full_name)
         if branch == base:
-            raise gh.GitHubError(None, f"estás en la rama base '{base}'; crea una rama antes")
+            raise gh.GitHubError(
+                None,
+                f"estás en la rama base '{base}'; crea una rama antes de abrir un PR",
+            )
         pr = gh.create_pull(token, repo_full_name, title=title, head=branch, base=base, body=body)
         return {"number": pr["number"], "url": pr["html_url"], "head": branch, "base": base}
 
-    d_pr = "Hace push de tu rama actual y abre un Pull Request en el repo del proyecto."
+    d_pr = (
+        "Hace push de tu rama actual y abre un Pull Request en el repo del proyecto. "
+        "Acepta `base` (string, opcional) para indicar la rama destino del PR — "
+        "ej. 'develop' para revisión previa al merge. Si se omite, usa la rama "
+        "por defecto del repo."
+    )
     d_push = "Hace push de tu rama actual al remoto (sin abrir PR)."
     d_list = "Lista los Pull Requests abiertos del repo del proyecto."
     d_comment = "Comenta en un Pull Request del repo del proyecto."
 
-    @tool("open_pull_request", d_pr, {"title": str, "body": str})
+    @tool("open_pull_request", d_pr, {"title": str, "body": str, "base": str})
     async def open_pull_request(args: dict) -> dict:
         title = args.get("title", "").strip() or "Cambios del agente"
         try:
-            data = await sync_to_async(_push_and_pr)(title, args.get("body", ""))
+            data = await sync_to_async(_push_and_pr)(
+                title, args.get("body", ""), args.get("base"),
+            )
         except Exception as exc:  # noqa: BLE001
             return _err(f"No se pudo abrir el PR: {exc}")
         return _ok(data)

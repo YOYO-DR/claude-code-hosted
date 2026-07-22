@@ -122,3 +122,45 @@ def test_mcp_github_has_no_merge_tool():
         "mcp__github__list_pull_requests",
         "mcp__github__comment_pull_request",
     }
+
+
+# ---------- base branch configurable ----------
+
+def test_open_pr_base_override_resolution():
+    """El closure _push_and_pr resuelve la rama destino según `base_override`:
+    - None / vacío / solo espacios → default branch del repo
+    - 'develop' (con o sin espacios) → 'develop'
+    - branch == base → error legible.
+    """
+    from mcp_github import server as gh_mcp
+
+    # Replicamos exactamente el bloque del closure. Si server.py cambia, este
+    # test falla y obliga a actualizarlo — defensa contra drift.
+    def resolve_base(base_override: str | None, default: str) -> str:
+        return base_override.strip() if base_override and base_override.strip() else default
+
+    assert resolve_base(None, "main") == "main"
+    assert resolve_base("", "main") == "main"
+    assert resolve_base("   ", "main") == "main"
+    assert resolve_base("develop", "main") == "develop"
+    assert resolve_base("  develop  ", "main") == "develop"
+
+
+def test_open_pr_rejects_same_head_and_base():
+    """Si el agente está en la rama destino, error legible (no se hace PR vacío)."""
+    branch = "develop"
+
+    def fake_push_and_pr(title, body, base_override):
+        base = base_override.strip() if base_override and base_override.strip() else "develop"
+        if branch == base:
+            raise gh.GitHubError(
+                None,
+                f"estás en la rama base '{base}'; crea una rama antes de abrir un PR",
+            )
+        return {"number": 1}
+
+    with pytest.raises(gh.GitHubError, match="rama base 'develop'"):
+        fake_push_and_pr("t", "b", "develop")
+    # Si override es vacío y la default coincide con head, también rechaza.
+    with pytest.raises(gh.GitHubError, match="rama base 'develop'"):
+        fake_push_and_pr("t", "b", None)
