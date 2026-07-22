@@ -45,16 +45,25 @@ def build_server(repo_full_name: str, dest: str, token: str):
         pr = gh.create_pull(token, repo_full_name, title=title, head=branch, base=base, body=body)
         return {"number": pr["number"], "url": pr["html_url"], "head": branch, "base": base}
 
-    def _pull_branch(branch: str) -> dict:
-        # 1) Trae la rama al local sin intentar mergear (fetch aislado).
-        gh._run_git(["fetch", "origin", branch], token=token, cwd=dest)
-        # 2) Checkout (idempotente: si ya estás en la rama, no hace nada).
-        gh._run_git(["checkout", branch], cwd=dest)
-        # 3) Pull propiamente. Si hay cambios locales no commiteados que
-        #    choquen, git falla con mensaje legible — propagamos tal cual.
-        pull_res = gh._run_git(["pull", "origin", branch], token=token, cwd=dest)
+    def _pull_branch(source: str, into: str | None) -> dict:
+        # 1) Trae la rama del remoto (fetch aislado para separar errores).
+        gh._run_git(["fetch", "origin", source], token=token, cwd=dest)
+        # 2) Decide rama destino del merge.
+        #    - into vacío / None → rama actual (NO se cambia).
+        #    - into == rama actual → no-op (skip checkout).
+        #    - into != rama actual → checkout primero.
+        target = into.strip() if into and into.strip() else None
+        if target:
+            current = gh.current_branch(dest)
+            if target != current:
+                gh._run_git(["checkout", target], cwd=dest)
+        # 3) Merge de origin/<source> en la rama actual (post-checkout).
+        #    Usamos `git merge` en vez de `git pull` porque ya hicimos fetch
+        #    arriba y queremos control fino sobre el mensaje de salida.
+        merge_res = gh._run_git(["merge", f"origin/{source}"], cwd=dest)
         sha = gh._run_git(["rev-parse", "--short", "HEAD"], cwd=dest).stdout.strip()
-        return {"branch": branch, "head": sha, "summary": pull_res.stdout.strip()}
+        branch = gh.current_branch(dest)
+        return {"branch": branch, "head": sha, "source": source, "summary": merge_res.stdout.strip()}
 
     d_pr = (
         "Hace push de tu rama actual y abre un Pull Request en el repo del proyecto. "
@@ -64,11 +73,14 @@ def build_server(repo_full_name: str, dest: str, token: str):
     )
     d_push = "Hace push de tu rama actual al remoto (sin abrir PR)."
     d_pull = (
-        "Hace `git pull origin <branch>` en el directorio del proyecto: trae los "
-        "cambios del remoto para la rama indicada. Útil cuando el operador ha "
-        "hecho ajustes en otra máquina y quieres sincronizar. Si no estás en esa "
-        "rama, hace checkout primero. Si hay conflictos locales, falla con un "
-        "error legible (no se sobreescriben cambios sin conflicto explícito)."
+        "Trae cambios del remoto sin cambiar tu rama actual (por defecto). "
+        "Acepta `source` (rama del remoto a traer, REQUERIDO) e `into` (rama local "
+        "destino, OPCIONAL). Si `into` se omite, hace `git fetch origin <source>` "
+        "y merge `origin/<source>` en la rama actual — útil para 'estoy en "
+        "feat/auth, tráeme los últimos cambios de develop y sigo aquí'. Si "
+        "`into` se pasa, hace checkout a esa rama antes del merge (cuando "
+        "corresponda). Si hay conflictos locales, falla con un error legible "
+        "(no se sobreescriben cambios sin conflicto explícito)."
     )
     d_list = "Lista los Pull Requests abiertos del repo del proyecto."
     d_comment = "Comenta en un Pull Request del repo del proyecto."
@@ -93,18 +105,22 @@ def build_server(repo_full_name: str, dest: str, token: str):
             return _err(f"No se pudo hacer push: {exc}")
         return _ok({"pushed": branch})
 
-    @tool("pull_branch", d_pull, {"branch": str})
+    @tool("pull_branch", d_pull, {"source": str, "into": str})
     async def pull_branch(args: dict) -> dict:
-        branch = (args.get("branch") or "").strip()
-        if not branch:
-            return _err("'branch' es requerido")
-        # Defensa contra inyecciones: ramas/refs no pueden contener espacios,
-        # .., ni caracteres de control. Si pasa, git igual lo rechazaría, pero
-        # cortamos en seco con un mensaje legible.
-        if any(c in branch for c in (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")):
-            return _err(f"nombre de rama inválido: {branch!r}")
+        source = (args.get("source") or "").strip()
+        if not source:
+            return _err("'source' es requerido (rama del remoto a traer)")
+        # Defensa contra inyecciones en nombres de rama. Si pasa, git igual
+        # lo rechazaría, pero cortamos en seco con un mensaje legible.
+        bad = (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")
+        if any(c in source for c in bad):
+            return _err(f"nombre de rama inválido en 'source': {source!r}")
+        into = args.get("into")
+        if isinstance(into, str):
+            if any(c in into for c in bad):
+                return _err(f"nombre de rama inválido en 'into': {into!r}")
         try:
-            data = await sync_to_async(_pull_branch)(branch)
+            data = await sync_to_async(_pull_branch)(source, into)
         except Exception as exc:  # noqa: BLE001
             return _err(f"No se pudo hacer pull: {exc}")
         return _ok(data)

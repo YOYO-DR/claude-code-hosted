@@ -127,80 +127,183 @@ def test_mcp_github_has_no_merge_tool():
 
 # ---------- pull_branch ----------
 
-def test_pull_branch_runs_fetch_checkout_pull_in_order(monkeypatch, tmp_path):
-    """El closure _pull_branch ejecuta la secuencia correcta: fetch → checkout
-    → pull → rev-parse, pasando token SOLO a los comandos que tocan la red."""
-    from mcp_github import server as gh_mcp
+class _FakeProc:
+    def __init__(self, stdout=""):
+        self.stdout = stdout
+        self.returncode = 0
+        self.stderr = ""
 
+
+def _make_recorder(monkeypatch, current_branch="feat/auth"):
+    """Monta un _run_git + current_branch simulados y devuelve la lista de
+    llamadas. La lista contiene (args_tuple, kwargs_dict)."""
     calls: list[tuple[tuple, dict]] = []
-
-    class FakeProc:
-        def __init__(self, stdout=""):
-            self.stdout = stdout
-            self.returncode = 0
-            self.stderr = ""
 
     def fake_run_git(args, token=None, cwd=None):
         calls.append((tuple(args), {"token": token, "cwd": cwd}))
-        # rev-parse --short HEAD devuelve el SHA; los demás devuelven vacío.
         if args[:2] == ["rev-parse", "--short"]:
-            return FakeProc(stdout="abc1234\n")
-        return FakeProc(stdout="Already up to date.\n")
+            return _FakeProc(stdout="abc1234\n")
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return _FakeProc(stdout=f"{current_branch}\n")
+        return _FakeProc(stdout="Merge made by the 'ort' strategy.\n")
 
     monkeypatch.setattr(gh, "_run_git", fake_run_git)
+    monkeypatch.setattr(gh, "current_branch", lambda d: current_branch)
+    return calls
 
-    # Replicamos el closure del server (sin tocar el módulo). Si cambia el
-    # orden o los args, este test falla y obliga a actualizar — defensa
-    # contra drift.
-    def _pull_branch(branch):
-        gh._run_git(["fetch", "origin", branch], token="tok", cwd="/p")
-        gh._run_git(["checkout", branch], cwd="/p")
-        pull_res = gh._run_git(["pull", "origin", branch], token="tok", cwd="/p")
+
+def test_pull_branch_default_no_checkout(monkeypatch):
+    """Sin `into`, NO se hace checkout: se mergea origin/<source> en la rama
+    actual. Caso de uso: estoy en feat/auth, traigo últimos cambios de develop
+    y sigo en feat/auth."""
+    calls = _make_recorder(monkeypatch, current_branch="feat/auth")
+
+    def _pull_branch(source, into):
+        gh._run_git(["fetch", "origin", source], token="tok", cwd="/p")
+        target = into.strip() if into and into.strip() else None
+        if target:
+            current = gh.current_branch("/p")
+            if target != current:
+                gh._run_git(["checkout", target], cwd="/p")
+        merge_res = gh._run_git(["merge", f"origin/{source}"], cwd="/p")
         sha = gh._run_git(["rev-parse", "--short", "HEAD"], cwd="/p").stdout.strip()
-        return {"branch": branch, "head": sha, "summary": pull_res.stdout.strip()}
+        branch = gh.current_branch("/p")
+        return {"branch": branch, "head": sha, "source": source, "summary": merge_res.stdout.strip()}
 
-    out = _pull_branch("develop")
-    assert out == {"branch": "develop", "head": "abc1234", "summary": "Already up to date."}
+    out = _pull_branch("develop", None)
+    assert out["branch"] == "feat/auth"   # NO cambió
+    assert out["source"] == "develop"
+    assert out["head"] == "abc1234"
 
-    # Secuencia exacta.
+    # Secuencia: fetch, merge, rev-parse — SIN checkout.
     assert [c[0] for c in calls] == [
         ("fetch", "origin", "develop"),
-        ("checkout", "develop"),
-        ("pull", "origin", "develop"),
+        ("merge", "origin/develop"),
         ("rev-parse", "--short", "HEAD"),
     ]
-    # Token solo donde toca la red (fetch, pull). checkout y rev-parse NO.
+    # Token solo en fetch (merge es local).
     assert calls[0][1]["token"] == "tok"
     assert calls[1][1]["token"] is None
-    assert calls[2][1]["token"] == "tok"
-    assert calls[3][1]["token"] is None
 
 
-@pytest.mark.parametrize("bad", ["", "  ", "feat/x y", "feat~1", "feat^1", "feat:foo", "feat?", "*", "[", "a\\b", "feat\nx"])
-def test_pull_branch_rejects_invalid_names(bad):
-    """La tool rechaza ramas vacías o con caracteres que git no acepta en
-    nombres de rama. Defensa rápida antes de pasar el input a git."""
-    branch = bad
+def test_pull_branch_with_into_changes_branch(monkeypatch):
+    """Con `into` distinto a la rama actual, checkout primero y luego merge."""
+    calls = _make_recorder(monkeypatch, current_branch="feat/auth")
 
+    def _pull_branch(source, into):
+        gh._run_git(["fetch", "origin", source], token="tok", cwd="/p")
+        target = into.strip() if into and into.strip() else None
+        if target:
+            current = gh.current_branch("/p")
+            if target != current:
+                gh._run_git(["checkout", target], cwd="/p")
+        merge_res = gh._run_git(["merge", f"origin/{source}"], cwd="/p")
+        sha = gh._run_git(["rev-parse", "--short", "HEAD"], cwd="/p").stdout.strip()
+        branch = gh.current_branch("/p")
+        return {"branch": branch, "head": sha, "source": source, "summary": merge_res.stdout.strip()}
+
+    _pull_branch("feat/auth", "develop")
+    assert [c[0] for c in calls] == [
+        ("fetch", "origin", "feat/auth"),
+        ("checkout", "develop"),                       # <-- cambia de rama
+        ("merge", "origin/feat/auth"),
+        ("rev-parse", "--short", "HEAD"),
+    ]
+    assert calls[1][1]["token"] is None  # checkout es local
+
+
+def test_pull_branch_with_same_into_skips_checkout(monkeypatch):
+    """`into` igual a la rama actual → checkout es no-op, se omite."""
+    calls = _make_recorder(monkeypatch, current_branch="feat/auth")
+
+    def _pull_branch(source, into):
+        gh._run_git(["fetch", "origin", source], token="tok", cwd="/p")
+        target = into.strip() if into and into.strip() else None
+        if target:
+            current = gh.current_branch("/p")
+            if target != current:
+                gh._run_git(["checkout", target], cwd="/p")
+        gh._run_git(["merge", f"origin/{source}"], cwd="/p")
+
+    _pull_branch("feat/auth", "feat/auth")
+    assert [c[0] for c in calls] == [
+        ("fetch", "origin", "feat/auth"),
+        ("merge", "origin/feat/auth"),  # sin checkout
+    ]
+
+
+def test_pull_branch_with_into_empty_string_treated_as_none(monkeypatch):
+    """`into=""` o `into=None` o `into="   "` → mismo comportamiento que default."""
+    calls = _make_recorder(monkeypatch, current_branch="feat/auth")
+
+    def _pull_branch(source, into):
+        gh._run_git(["fetch", "origin", source], token="tok", cwd="/p")
+        target = into.strip() if into and into.strip() else None
+        if target:
+            current = gh.current_branch("/p")
+            if target != current:
+                gh._run_git(["checkout", target], cwd="/p")
+        gh._run_git(["merge", f"origin/{source}"], cwd="/p")
+
+    for empty in (None, "", "   "):
+        calls.clear()
+        _pull_branch("develop", empty)
+        assert [c[0] for c in calls] == [
+            ("fetch", "origin", "develop"),
+            ("merge", "origin/develop"),
+        ], f"into={empty!r} should not trigger checkout"
+
+
+def test_pull_branch_rejects_empty_source():
+    """source vacío → error antes de tocar git."""
     async def call(args):
-        # Replicamos la validación de la tool sin instanciar el server entero.
-        branch = (args.get("branch") or "").strip()
-        if not branch:
-            return ("err", "'branch' es requerido")
-        if any(c in branch for c in (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")):
-            return ("err", f"nombre de rama inválido: {branch!r}")
+        source = (args.get("source") or "").strip()
+        if not source:
+            return ("err", "'source' es requerido (rama del remoto a traer)")
         return ("ok", None)
 
     import asyncio
-    kind, _ = asyncio.run(call({"branch": bad}))
+    for empty in (None, "", "   "):
+        kind, msg = asyncio.run(call({"source": empty}))
+        assert kind == "err"
+        assert "source" in msg
+
+
+@pytest.mark.parametrize("bad", ["feat/x y", "feat~1", "feat^1", "feat:foo", "feat?", "*", "[", "a\\b", "feat\nx"])
+def test_pull_branch_rejects_invalid_source_names(bad):
+    async def call(args):
+        bad_chars = (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")
+        source = (args.get("source") or "").strip()
+        if not source:
+            return ("err", "source requerido")
+        if any(c in source for c in bad_chars):
+            return ("err", f"nombre de rama inválido en 'source': {source!r}")
+        return ("ok", None)
+
+    import asyncio
+    kind, msg = asyncio.run(call({"source": bad, "into": None}))
     assert kind == "err"
+    assert "inválido" in msg
+
+
+@pytest.mark.parametrize("bad", ["feat/x y", "feat~1", "feat:foo"])
+def test_pull_branch_rejects_invalid_into_names(bad):
+    async def call(args):
+        bad_chars = (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")
+        source = "develop"
+        into = args.get("into")
+        if isinstance(into, str) and any(c in into for c in bad_chars):
+            return ("err", f"nombre de rama inválido en 'into': {into!r}")
+        return ("ok", None)
+
+    import asyncio
+    kind, msg = asyncio.run(call({"source": "develop", "into": bad}))
+    assert kind == "err"
+    assert "into" in msg
 
 
 def test_pull_branch_propagates_git_errors(monkeypatch):
-    """Si git falla (rama inexistente, conflicto, etc.), la tool devuelve
-    error legible — no se come el stderr de git."""
-    from mcp_github import server as gh_mcp
-
+    """Si git falla (rama inexistente, conflicto, etc.), error legible."""
     def boom(*a, **k):
         raise gh.GitHubError(None, "couldn't find remote ref 'origin/nope'")
 
