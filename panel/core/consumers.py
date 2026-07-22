@@ -131,8 +131,14 @@ class SessionConsumer(AsyncWebsocketConsumer):
             except (json.JSONDecodeError, TypeError):
                 continue
             if channel == bus.key_out(self.sid):
+                # SP11: ui_deltas publicados via _redis_publish_ui (context_usage,
+                # git_branch, etc.) llevan seq=0 fijo — son efímeros, no parte
+                # del stream. Si los metemos por SeqDedup, would_forward(0)
+                # retorna False desde el primer publish (last_sent arranca
+                # en last_seq=0). Los reenviamos siempre.
+                is_ephemeral = data.get("seq", 0) == 0 or data.get("type") == "ui_delta"
                 seq = data.get("seq")
-                if seq is not None and not self._dedup.should_forward(seq):
+                if seq is not None and not is_ephemeral and not self._dedup.should_forward(seq):
                     continue
                 # Mismo shape plano que _send_backlog (FASE C).
                 await self.send(text_data=json.dumps(
