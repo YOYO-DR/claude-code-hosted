@@ -818,3 +818,51 @@ li.diff-item { padding: 0; overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .img-modal-img[style*="scale(1)"] { transition: none; }
 }
+
+/* TextFileModal — reutiliza .img-modal-* (overlay, header, footer) y aporta
+   solo lo específico del body: stage con scroll y <pre> monoespaciado. */
+.text-modal-stage {
+  position: relative;
+  overflow: auto;
+  padding: 1rem 1.2rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: stretch;
+}
+.text-modal-pre {
+  flex: 1;
+  margin: 0;
+  padding: 1rem 1.2rem;
+  background: rgba(20, 20, 25, 0.55);
+  color: #e6e6e6;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 4;
+  /* will-change para scroll fluido en archivos largos. */
+  will-change: scroll-position;
+}
+.text-modal-pre.wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* El botón "Copiar" en estado ok usa el verde del tema; el "Descargar" ya
+   hereda de .img-modal-download. El "↩/→ Wrap" es más ancho que los otros
+   por la etiqueta, así que le damos min-width. */
+.img-modal-controls button.ok {
+  background: rgba(29, 161, 99, 0.25);
+  border-color: rgba(29, 161, 99, 0.45);
+  color: #d2f5dd;
+  width: auto;
+  padding: 0 0.7rem;
+}
+.img-modal-controls .img-modal-download {
+  width: auto;
+  padding: 0 0.7rem;
+  gap: 0.3rem;
+}

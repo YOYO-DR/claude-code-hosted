@@ -34,10 +34,32 @@ MAX_RAW_BYTES = 25 * 1024 * 1024  # 25 MB — tope para imágenes del visor
 # el path ya está validado por _safe_resolve, NO servimos binarios arbitrarios
 # (un .exe o .so renombrado no debe escaparse por aquí). El cliente SPA
 # determina la extensión; el servidor la revalida.
+#
+# Imágenes: para el visor con zoom.
+# Texto/código: para la descarga desde el TextFileModal (el contenido ya viaja
+# por /file/ en JSON; aquí solo se necesita el raw para descargar).
 RAW_IMAGE_EXTS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
     ".bmp", ".ico", ".avif", ".heic", ".heif",
 }
+RAW_TEXT_EXTS = {
+    # Texto plano / marcado
+    ".txt", ".md", ".rst", ".adoc",
+    # Datos estructurados
+    ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv",
+    ".xml", ".ini", ".conf", ".cfg", ".env", ".properties",
+    # Configs / logs
+    ".log", ".gitignore", ".gitattributes", ".editorconfig",
+    # Código fuente común
+    ".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs",
+    ".ts", ".tsx", ".jsx", ".html", ".htm", ".css", ".scss", ".less",
+    ".java", ".kt", ".go", ".rs", ".rb", ".php", ".pl",
+    ".c", ".h", ".cpp", ".hpp", ".cs", ".swift", ".m",
+    ".sql", ".dockerfile", ".Makefile",
+    # Sin extensión: archivos como Dockerfile, Makefile, LICENSE, README (sin .md)
+    "",
+}
+RAW_EXTS = RAW_IMAGE_EXTS | RAW_TEXT_EXTS
 
 
 def _serialize_project(p: Project) -> dict:
@@ -181,11 +203,12 @@ def project_file(request: HttpRequest, slug: str) -> JsonResponse:
 def project_raw(request: HttpRequest, slug: str) -> HttpResponse:
     """GET /api/v1/projects/<slug>/raw?path=<rel>
 
-    Sirve el contenido crudo de un archivo de imagen para el visor del SPA.
-    Reuso la misma validación de path traversal que `project_file`. Allowlist
-    de extensiones (RAW_IMAGE_EXTS) — un .exe renombrado a .png NO pasa el
-    check final de extensión; el servidor siempre manda application/octet-stream
-    si el tipo no se reconoce, pero igualmente está restringido al allowlist.
+    Sirve el contenido crudo de un archivo para descarga / visor. Reuso la
+    misma validación de path traversal que `project_file`. Allowlist de
+    extensiones (RAW_EXTS = imágenes + texto/código común) — un .exe o .so
+    renombrado NO pasa el check final; el servidor siempre queda restringido
+    a la allowlist. Archivos sin extensión (Dockerfile, Makefile, LICENSE)
+    también se sirven si el nombre exacto está en RAW_TEXT_EXTS.
     """
     p = get_object_or_404(Project, slug=slug, status=Project.Status.ACTIVE)
     rel = request.GET.get("path")
@@ -197,15 +220,18 @@ def project_raw(request: HttpRequest, slug: str) -> HttpResponse:
         return JsonResponse({"error": str(exc)}, status=403)
     if not target.exists() or not target.is_file():
         return JsonResponse({"error": "archivo no existe"}, status=404)
-    # Allowlist por extensión (case-insensitive). Si no encaja, 403.
-    if target.suffix.lower() not in RAW_IMAGE_EXTS:
+    # Allowlist por extensión (case-insensitive) o por nombre exacto sin
+    # extensión (Dockerfile, Makefile, LICENSE, README, etc.).
+    ext = target.suffix.lower()
+    name = target.name  # case-sensitive, igual que en el SPA
+    if ext not in RAW_EXTS and name not in {"Dockerfile", "Makefile", "LICENSE", "README", "COPYING"}:
         return JsonResponse({"error": "tipo no soportado"}, status=403)
     try:
         size = target.stat().st_size
     except OSError:
         return JsonResponse({"error": "no se pudo leer"}, status=500)
     if size > MAX_RAW_BYTES:
-        return JsonResponse({"error": "imagen demasiado grande"}, status=413)
+        return JsonResponse({"error": "archivo demasiado grande"}, status=413)
     ctype, _ = mimetypes.guess_type(str(target))
     try:
         with open(target, "rb") as f:

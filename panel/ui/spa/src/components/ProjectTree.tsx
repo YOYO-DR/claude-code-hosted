@@ -1,11 +1,13 @@
 // Componentes del panel lateral: árbol de archivos, visor, diff.
 // FASE C.5 — consumen /api/v1/projects/<slug>/{tree,file,diff}.
 // Imágenes se sirven vía /raw/ y se abren en ImageModal con zoom.
+// Archivos de texto se abren en TextFileModal (copy + download).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { ImageModal } from "./ImageModal";
+import { TextFileModal } from "./TextFileModal";
 
 // Allowlist de extensiones que se renderizan como imagen. Coincide con
 // RAW_IMAGE_EXTS del backend; si se desincroniza, el backend responderá 403
@@ -46,9 +48,12 @@ function fmtSize(b: number): string {
 export function ProjectTree({ slug }: { slug: string }) {
   const [cwd, setCwd] = useState(".");
   const [selected, setSelected] = useState<string | null>(null);
-  // Imagen actualmente abierta en el modal. Si coincide con `selected`, el
-  // usuario hizo click en una imagen en el árbol y la verá en grande.
+  // Imagen actualmente abierta en el modal.
   const [imageModal, setImageModal] = useState<{ path: string; size: number } | null>(null);
+  // Texto abierto en el modal. Se setea cuando llega la respuesta del
+  // /file/ y resulta ser no-binaria. Si es binaria, queda en null y se
+  // muestra el placeholder inline de siempre.
+  const [textModal, setTextModal] = useState<{ path: string; size: number; content: string; truncated: boolean } | null>(null);
 
   const tree = useQuery({
     queryKey: ["tree", slug, cwd],
@@ -62,22 +67,39 @@ export function ProjectTree({ slug }: { slug: string }) {
     enabled: !!selected && !imageModal,
   });
 
+  // Cuando llega la respuesta de /file/: si es texto, abrimos el modal.
+  // Si es binario, no abrimos modal — el render de abajo muestra el placeholder.
+  useEffect(() => {
+    if (!file.data || imageModal) return;
+    if (file.data.is_binary || file.data.content === null) return;
+    setTextModal({
+      path: selected!,
+      size: file.data.size,
+      content: file.data.content,
+      truncated: file.data.truncated,
+    });
+  }, [file.data, imageModal, selected]);
+
   const onPickEntry = (e: TreeEntry) => {
     if (e.is_dir) {
-      // ruta absoluta o relativa: combinamos con cwd actual.
       const next = cwd === "." ? e.name : `${cwd}/${e.name}`;
       setCwd(next);
       setSelected(null);
       setImageModal(null);
+      setTextModal(null);
     } else {
       const next = cwd === "." ? e.name : `${cwd}/${e.name}`;
       if (isImage(e.name)) {
         // Imágenes: NO cargar /file/ (que solo devuelve metadata para
         // binarios); abrir directamente el modal con la URL al endpoint raw.
+        setTextModal(null);
         setSelected(next);
         setImageModal({ path: next, size: e.size });
       } else {
+        // Texto o binario: dejamos que el useQuery traiga /file/ y el
+        // useEffect abra el TextFileModal si corresponde.
         setImageModal(null);
+        setTextModal(null);
         setSelected(next);
       }
     }
@@ -90,6 +112,7 @@ export function ProjectTree({ slug }: { slug: string }) {
     setCwd(parts.join("/") || ".");
     setSelected(null);
     setImageModal(null);
+    setTextModal(null);
   };
 
   return (
@@ -123,19 +146,13 @@ export function ProjectTree({ slug }: { slug: string }) {
         </ul>
       )}
 
-      {selected && !imageModal && (
+      {selected && !imageModal && !textModal && (
         <div style={{ marginTop: "0.5rem" }}>
           <div className="meta">📄 {selected}</div>
           {file.isLoading && <p className="meta">Cargando…</p>}
           {file.error && <p className="msg error">Error: {String(file.error)}</p>}
           {file.data?.is_binary && (
             <p className="meta">binario ({fmtSize(file.data.size)})</p>
-          )}
-          {file.data && !file.data.is_binary && (
-            <pre className="unboxed" style={{ maxHeight: 240, overflow: "auto" }}>
-              {file.data.content}
-              {file.data.truncated && <div className="meta">(truncado)</div>}
-            </pre>
           )}
         </div>
       )}
@@ -148,6 +165,18 @@ export function ProjectTree({ slug }: { slug: string }) {
           filename={imageModal.path.split("/").pop() || imageModal.path}
           sizeBytes={imageModal.size}
           onClose={() => setImageModal(null)}
+        />
+      )}
+
+      {textModal && (
+        <TextFileModal
+          open={true}
+          content={textModal.content}
+          filename={textModal.path.split("/").pop() || textModal.path}
+          sizeBytes={textModal.size}
+          truncated={textModal.truncated}
+          downloadUrl={`/api/v1/projects/${slug}/raw/?path=${encodeURIComponent(textModal.path)}`}
+          onClose={() => setTextModal(null)}
         />
       )}
     </div>
