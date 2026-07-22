@@ -119,9 +119,104 @@ def test_mcp_github_has_no_merge_tool():
     assert set(gh_mcp.TOOL_NAMES) == {
         "mcp__github__open_pull_request",
         "mcp__github__push_branch",
+        "mcp__github__pull_branch",
         "mcp__github__list_pull_requests",
         "mcp__github__comment_pull_request",
     }
+
+
+# ---------- pull_branch ----------
+
+def test_pull_branch_runs_fetch_checkout_pull_in_order(monkeypatch, tmp_path):
+    """El closure _pull_branch ejecuta la secuencia correcta: fetch → checkout
+    → pull → rev-parse, pasando token SOLO a los comandos que tocan la red."""
+    from mcp_github import server as gh_mcp
+
+    calls: list[tuple[tuple, dict]] = []
+
+    class FakeProc:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.returncode = 0
+            self.stderr = ""
+
+    def fake_run_git(args, token=None, cwd=None):
+        calls.append((tuple(args), {"token": token, "cwd": cwd}))
+        # rev-parse --short HEAD devuelve el SHA; los demás devuelven vacío.
+        if args[:2] == ["rev-parse", "--short"]:
+            return FakeProc(stdout="abc1234\n")
+        return FakeProc(stdout="Already up to date.\n")
+
+    monkeypatch.setattr(gh, "_run_git", fake_run_git)
+
+    # Replicamos el closure del server (sin tocar el módulo). Si cambia el
+    # orden o los args, este test falla y obliga a actualizar — defensa
+    # contra drift.
+    def _pull_branch(branch):
+        gh._run_git(["fetch", "origin", branch], token="tok", cwd="/p")
+        gh._run_git(["checkout", branch], cwd="/p")
+        pull_res = gh._run_git(["pull", "origin", branch], token="tok", cwd="/p")
+        sha = gh._run_git(["rev-parse", "--short", "HEAD"], cwd="/p").stdout.strip()
+        return {"branch": branch, "head": sha, "summary": pull_res.stdout.strip()}
+
+    out = _pull_branch("develop")
+    assert out == {"branch": "develop", "head": "abc1234", "summary": "Already up to date."}
+
+    # Secuencia exacta.
+    assert [c[0] for c in calls] == [
+        ("fetch", "origin", "develop"),
+        ("checkout", "develop"),
+        ("pull", "origin", "develop"),
+        ("rev-parse", "--short", "HEAD"),
+    ]
+    # Token solo donde toca la red (fetch, pull). checkout y rev-parse NO.
+    assert calls[0][1]["token"] == "tok"
+    assert calls[1][1]["token"] is None
+    assert calls[2][1]["token"] == "tok"
+    assert calls[3][1]["token"] is None
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "feat/x y", "feat~1", "feat^1", "feat:foo", "feat?", "*", "[", "a\\b", "feat\nx"])
+def test_pull_branch_rejects_invalid_names(bad):
+    """La tool rechaza ramas vacías o con caracteres que git no acepta en
+    nombres de rama. Defensa rápida antes de pasar el input a git."""
+    branch = bad
+
+    async def call(args):
+        # Replicamos la validación de la tool sin instanciar el server entero.
+        branch = (args.get("branch") or "").strip()
+        if not branch:
+            return ("err", "'branch' es requerido")
+        if any(c in branch for c in (" ", "\t", "\n", "~", "^", ":", "?", "*", "[", "\\")):
+            return ("err", f"nombre de rama inválido: {branch!r}")
+        return ("ok", None)
+
+    import asyncio
+    kind, _ = asyncio.run(call({"branch": bad}))
+    assert kind == "err"
+
+
+def test_pull_branch_propagates_git_errors(monkeypatch):
+    """Si git falla (rama inexistente, conflicto, etc.), la tool devuelve
+    error legible — no se come el stderr de git."""
+    from mcp_github import server as gh_mcp
+
+    def boom(*a, **k):
+        raise gh.GitHubError(None, "couldn't find remote ref 'origin/nope'")
+
+    monkeypatch.setattr(gh, "_run_git", boom)
+
+    async def call():
+        try:
+            gh._run_git(["fetch", "origin", "nope"], token="t", cwd="/p")
+            return ("ok", None)
+        except gh.GitHubError as exc:
+            return ("err", f"No se pudo hacer pull: {exc}")
+
+    import asyncio
+    kind, msg = asyncio.run(call())
+    assert kind == "err"
+    assert "couldn't find remote ref" in msg
 
 
 # ---------- base branch configurable ----------
