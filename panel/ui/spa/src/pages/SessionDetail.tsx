@@ -350,10 +350,7 @@ export function SessionPage() {
   const resolvePerm = useMutation({
     mutationFn: ({ id, answer, option_index }: {
       id: string;
-      answer: "allow" | "deny";
-      // SP9.1: si la SPA eligió una opción de AskUserQuestion, lo propaga al
-      // worker en updated_input.answer (campo del payload). El worker lo
-      // devuelve al SDK vía PermissionResultAllow(updated_input=...).
+      answer: "allow" | "allow_always" | "deny";
       option_index?: number;
     }) =>
       api(`/api/v1/permissions/${id}/resolve/`, {
@@ -529,7 +526,7 @@ function BubbleView({
   bubble: Bubble;
   onResolvePerm: (
     id: string,
-    answer: "allow" | "deny",
+    answer: "allow" | "allow_always" | "deny",
     option_index?: number,
   ) => void;
   resolving: boolean;
@@ -627,6 +624,30 @@ function BubbleView({
                     className="danger"
                     onClick={() => onResolvePerm(id, "deny")}
                     disabled={resolving}
+                  >
+                    Denegar
+                  </button>
+                </>
+              )}
+              {!isQuestion && (
+                <>
+                  <button
+                    className="primary"
+                    disabled={resolving}
+                    onClick={() => onResolvePerm(id, "allow")}
+                  >
+                    Permitir
+                  </button>
+                  <button
+                    disabled={resolving}
+                    onClick={() => onResolvePerm(id, "allow_always")}
+                  >
+                    Permitir siempre
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={resolving}
+                    onClick={() => onResolvePerm(id, "deny")}
                   >
                     Denegar
                   </button>
