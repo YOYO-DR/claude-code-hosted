@@ -108,3 +108,22 @@ def test_suggested_allow_rules_ignores_deny_and_no_content():
 
 def test_suggested_allow_rules_empty_ctx():
     assert session_worker._suggested_allow_rules(object()) == []
+
+
+def test_extract_commands_normalizes_shapes():
+    """SP12: get_server_info().commands → [{name, description}] defensivo."""
+    info = {"commands": [
+        {"name": "/compact", "description": "compacta"},
+        {"command": "context", "summary": "muestra contexto"},
+        "clear",
+    ]}
+    assert session_worker._extract_commands(info) == [
+        {"name": "compact", "description": "compacta"},
+        {"name": "context", "description": "muestra contexto"},
+        {"name": "clear", "description": ""},
+    ]
+
+
+def test_extract_commands_empty():
+    assert session_worker._extract_commands(None) == []
+    assert session_worker._extract_commands({}) == []

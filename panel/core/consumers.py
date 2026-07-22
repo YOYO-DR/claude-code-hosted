@@ -218,6 +218,7 @@ class SessionConsumer(AsyncWebsocketConsumer):
 
         rows = Event.objects.filter(session_id=sid, seq__gt=last_seq).order_by("seq")
         return [
-            {"seq": r.seq, "type": r.type, "payload": r.payload, "ts": r.ts.isoformat()}
+            {"seq": r.seq, "type": r.type, "payload": r.payload,
+             "ui_event": r.ui_event, "ts": r.ts.isoformat()}
             for r in rows
         ]

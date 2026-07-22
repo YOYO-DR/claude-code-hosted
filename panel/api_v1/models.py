@@ -31,6 +31,22 @@ def _parse_body(request: HttpRequest) -> dict:
         return {}
 
 
+def _coerce_int_or_none(value: object, *, lo: int | None = None, hi: int | None = None):
+    """Devuelve un int en [lo, hi], o None (vacío/inválido). SP12: usado para
+    max_context_tokens (>=1) y auto_compact_threshold (1-100)."""
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
+
+
 @require_GET
 @require_verified_json
 def list_models(request: HttpRequest) -> JsonResponse:
@@ -69,6 +85,10 @@ def create_model(request: HttpRequest) -> JsonResponse:
         model=model_name,
         base_url=base_url,
         extra_env=extra_env,
+        max_context_tokens=_coerce_int_or_none(body.get("max_context_tokens"), lo=1),
+        auto_compact_threshold=_coerce_int_or_none(
+            body.get("auto_compact_threshold"), lo=1, hi=100
+        ),
     )
     if token:
         model_svc.store_token(profile, token)
@@ -95,6 +115,12 @@ def update_model(request: HttpRequest, pk: int) -> JsonResponse:
         profile.base_url = (body["base_url"] or "").strip() or None
     if "extra_env" in body:
         profile.extra_env = body["extra_env"] or {}
+    if "max_context_tokens" in body:
+        profile.max_context_tokens = _coerce_int_or_none(body["max_context_tokens"], lo=1)
+    if "auto_compact_threshold" in body:
+        profile.auto_compact_threshold = _coerce_int_or_none(
+            body["auto_compact_threshold"], lo=1, hi=100
+        )
     if "auth_token" in body:
         # Si el cliente manda auth_token explícitamente, lo guardamos (puede
         # ser string vacío para BORRAR el token).

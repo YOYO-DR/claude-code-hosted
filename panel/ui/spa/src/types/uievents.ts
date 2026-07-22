@@ -17,7 +17,13 @@ export type UIEventKind =
   | "git_branch"
   | "context_usage"
   | "user"
-  | "error";
+  | "error"
+  // SP12: cobertura total del SDK.
+  | "compact" // system.compact_boundary
+  | "rate_limit" // RateLimitEvent
+  | "task" // task_started/progress/notification/updated (subagentes)
+  | "hook" // hook_started/hook_response (verboso)
+  | "slash_commands"; // lista de comandos `/` (efímero, no burbuja)
 
 export interface UIEventBase {
   v: 1;
@@ -90,10 +96,46 @@ export interface ContextUsagePayload {
   max_tokens: number;
   percentage: number;
   model: string;
+  auto_compact_threshold?: number | null; // % (1-100)
+  auto_compact_enabled?: boolean;
 }
 export interface ErrorPayload {
   message: string;
   fatal: boolean;
+  code?: string;
+  source?: string;
+}
+// SP12
+export interface CompactPayload {
+  pre_tokens?: number | null;
+  trigger?: string | null;
+}
+export interface RateLimitPayload {
+  status?: string | null;
+  resets_at?: string | null;
+  rate_limit_type?: string | null;
+  utilization?: number | null;
+  overage_status?: string | null;
+}
+export interface TaskPayload {
+  subtype: string;
+  task_id?: string | null;
+  description?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  last_tool_name?: string | null;
+}
+export interface HookPayload {
+  subtype: string;
+  hook_event_name?: string | null;
+  data?: Record<string, unknown>;
+}
+export interface SlashCommand {
+  name: string;
+  description: string;
+}
+export interface SlashCommandsPayload {
+  commands: SlashCommand[];
 }
 
 // El payload concreto depende del `kind`. Para el front usamos `as` casts

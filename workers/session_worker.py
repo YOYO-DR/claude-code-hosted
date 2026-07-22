@@ -85,6 +85,27 @@ def _suggested_allow_rules(ctx: object) -> list[str]:
     return _rules_to_strings(_allow_suggestions(ctx))
 
 
+def _extract_commands(info: dict | None) -> list[dict]:
+    """SP12: normaliza la lista de comandos del init del CLI (get_server_info)
+    a [{name, description}]. El shape exacto de cada item lo decide el CLI, así
+    que leemos defensivamente (dict con name/command + description/summary, o
+    string suelto)."""
+    if not info:
+        return []
+    raw = info.get("commands") or info.get("slash_commands") or []
+    out: list[dict] = []
+    for c in raw:
+        if isinstance(c, dict):
+            name = c.get("name") or c.get("command") or ""
+            desc = c.get("description") or c.get("summary") or ""
+        else:
+            name, desc = str(c), ""
+        name = str(name).lstrip("/")
+        if name:
+            out.append({"name": name, "description": str(desc)})
+    return out
+
+
 def redis_exceptions() -> tuple[type[BaseException], ...]:
     """Tipos de error que redis-py puede lanzar cuando el bus está caído o
     inestable. Import lazy para evitar cargar redis en frío."""
@@ -114,6 +135,11 @@ class Worker:
         self._stream_acc = StreamAccumulator()
         # FASE C.6: cache del último git_branch emitido (branch+'|'+dirty).
         self._last_git_state: str | None = None
+        # SP12: contexto por modelo (poblados en _build_options).
+        self._max_context_tokens: int | None = None
+        self._auto_compact_threshold: int | None = None
+        # SP12: la lista de comandos `/` se emite una sola vez (viene del init).
+        self._slash_emitted = False
 
     async def run(self) -> None:
         session = await self._load_session()
@@ -183,6 +209,9 @@ class Worker:
         """
         from panel.core.events.normalize import UIEvent
         warned = False
+        # SP12: emitir una vez la lista de comandos `/` (built-in + custom +
+        # plugins) que reporta el init del CLI, para el menú del chat.
+        await self._maybe_emit_slash_commands(session)
         while not self._stop.is_set():
             resp = None
             try:
@@ -197,11 +226,31 @@ class Worker:
                     warned = True
             if resp is not None:
                 try:
+                    total = int(resp.get("totalTokens", 0))
+                    max_tokens = int(resp.get("maxTokens", 0) or 0)
+                    # SP12: override del denominador si el modelo lo define
+                    # (proveedores custom reportan un max incorrecto).
+                    if self._max_context_tokens:
+                        max_tokens = int(self._max_context_tokens)
+                    pct = (
+                        (total / max_tokens * 100.0)
+                        if max_tokens > 0
+                        else float(resp.get("percentage", 0.0))
+                    )
+                    # Umbral de auto-compact como %: prioridad al valor del
+                    # modelo; si no, derivar del que reporta el SDK (en tokens).
+                    threshold = self._auto_compact_threshold
+                    if threshold is None:
+                        act = resp.get("autoCompactThreshold")
+                        if act and max_tokens > 0:
+                            threshold = round(float(act) / max_tokens * 100.0)
                     payload = {
-                        "total_tokens": int(resp.get("totalTokens", 0)),
-                        "max_tokens": int(resp.get("maxTokens", 0)),
-                        "percentage": float(resp.get("percentage", 0.0)),
+                        "total_tokens": total,
+                        "max_tokens": max_tokens,
+                        "percentage": pct,
                         "model": str(resp.get("model", "")),
+                        "auto_compact_threshold": threshold,
+                        "auto_compact_enabled": bool(resp.get("isAutoCompactEnabled", False)),
                     }
                     ue = UIEvent(
                         v=1, seq=0, session_id=str(session.id),
@@ -217,6 +266,30 @@ class Worker:
                 await asyncio.wait_for(self._stop.wait(), timeout=CONTEXT_USAGE_INTERVAL)
             except asyncio.TimeoutError:
                 pass
+
+    async def _maybe_emit_slash_commands(self, session: Session) -> None:
+        """SP12: publica UNA vez el UIEvent efímero `slash_commands` con los
+        comandos disponibles (get_server_info del init del CLI). Best-effort."""
+        if self._slash_emitted or self._client is None:
+            return
+        try:
+            info = await self._client.get_server_info()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("get_server_info falló (se silencia): %s", exc)
+            return
+        commands = _extract_commands(info)
+        if not commands:
+            return
+        from panel.core.events.normalize import UIEvent
+        ue = UIEvent(
+            v=1, seq=0, session_id=str(session.id), ts="",
+            kind="slash_commands", payload={"commands": commands},
+        )
+        try:
+            self._redis_publish_ui(ue.to_dict())
+            self._slash_emitted = True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("slash_commands publish falló (se silencia): %s", exc)
 
     async def _loop(self, session: Session, client: ClaudeSDKClient) -> None:
         while not self._stop.is_set():
@@ -253,6 +326,8 @@ class Worker:
 
     async def _run_turn(self, session: Session, client: ClaudeSDKClient, text: str) -> None:
         await self._set_status(session, Session.Status.RUNNING)
+        # Nuevo turno: olvida si hubo streaming (anti-duplicado en _emit).
+        self._stream_acc.reset_turn()
         await client.query(text)
         async for sdk_msg in client.receive_response():
             await self._emit(session, sdk_msg)
@@ -292,23 +367,50 @@ class Worker:
                     log.warning("publish UI delta falló: %s", exc)
             return
 
-        # Mensaje macro (assistant/user/system/result): persistir crudo + UIEvent.
+        # Mensaje macro (assistant/user/system/result): persistir crudo + TODOS
+        # los UIEvent, cada uno con su PROPIO seq.
+        # BUGFIX reload: antes solo se persistía ui_events[0]. Un
+        # AssistantMessage con [thinking, text, tool_use] perdía text y
+        # tool_call al recargar (solo sobrevivía el primer bloque, el thinking
+        # con extended thinking). Ahora cada bloque va a su fila.
         ui_events = norm.normalize_sdk_message(
             sdk_msg, seq=self._seq, session_id=str(session.id),
         )
-        ui_event_dict = ui_events[0].to_dict() if ui_events else None
-        event = await sync_to_async(event_svc.persist_event)(
-            session, self._seq, etype, payload, ui_event=ui_event_dict,
-        )
-        if event is None:
+        if not ui_events:
+            # Mensaje sin UIEvent (p.ej. system.thinking_tokens): persistir crudo
+            # para auditoría, sin burbuja. No se publica.
+            event = await sync_to_async(event_svc.persist_event)(
+                session, self._seq, etype, payload, ui_event=None,
+            )
+            if event is not None:
+                self._seq += 1
+                await self._update_session_from_message(session, etype, payload)
+            await self._maybe_emit_git_branch(session, sdk_msg)
             return
-        self._seq += 1
+
+        # Anti-duplicado: si ya hubo deltas de streaming este turno, el
+        # texto/thinking macro ya se vieron en vivo — se PERSISTEN (para reload)
+        # pero NO se re-publican. Si el proveedor no hace streaming (deltas=0),
+        # se publican para que aparezcan en vivo.
+        streamed = self._stream_acc.produced_this_turn()
         await self._update_session_from_message(session, etype, payload)
-        # Redis después (best-effort: si está caído, el evento ya está en PG).
-        try:
-            await sync_to_async(self._publish)(event)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("publish falló (evento ya en PG): %s", exc)
+        for i, ue in enumerate(ui_events):
+            ue.seq = self._seq
+            row_payload = payload if i == 0 else {}
+            row_type = etype if i == 0 else ue.kind
+            event = await sync_to_async(event_svc.persist_event)(
+                session, self._seq, row_type, row_payload, ui_event=ue.to_dict(),
+            )
+            self._seq += 1
+            if event is None:
+                continue  # (session, seq) ya existía (replay idempotente)
+            if ue.kind in ("agent_text", "agent_thinking") and streamed:
+                continue  # ya visto por streaming; persistido para reload
+            # Redis después (best-effort: si está caído, ya está en PG).
+            try:
+                await sync_to_async(self._publish)(event)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("publish falló (evento ya en PG): %s", exc)
         # FASE C.6: si el evento puede haber mutado el repo, emite UIEvent
         # git_branch si la rama o el dirty cambió. Polling barato
         # (rev-parse + status --porcelain, <50ms típico).
@@ -471,6 +573,9 @@ class Worker:
         profile = await sync_to_async(lambda: project.model_profile)()
         env = await sync_to_async(render_env)(profile)
         self._slug = project.slug
+        # SP12: contexto por modelo para la barra + marcador de auto-compact.
+        self._max_context_tokens = profile.max_context_tokens
+        self._auto_compact_threshold = profile.auto_compact_threshold
         approve = policy.mode == "approve"
         mode: PermissionMode = "default" if approve else "bypassPermissions"
         # MCP de puertos in-process (§4.5): tokens/DB nunca a disco. Las tools

@@ -49,6 +49,8 @@ def serialize(profile: ModelProfile) -> dict:
         "base_url": profile.base_url,
         "model": profile.model,
         "extra_env": profile.extra_env,
+        "max_context_tokens": profile.max_context_tokens,
+        "auto_compact_threshold": profile.auto_compact_threshold,
         "has_token": has_token(profile),
         "updated_at": profile.updated_at.isoformat(),
     }

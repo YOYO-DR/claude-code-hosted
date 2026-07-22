@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { openSessionWs, type RawEventMessage } from "@/lib/ws";
-import type { UIEvent, UIEventKind } from "@/types/uievents";
+import type { UIEvent, UIEventKind, SlashCommand } from "@/types/uievents";
 import { ProjectTree, ProjectDiff } from "@/components/ProjectTree";
 import { Modal } from "@/components/Modal";
 
@@ -223,8 +223,17 @@ export function SessionPage() {
   // llega por WS vía _redis_publish_ui. Lo capturamos en un state efímero
   // y lo renderizamos como una barra debajo del input-bar, NO como bubble
   // (no compite por espacio con la conversación).
-  const [ctxLive, setCtxLive] = useState<{ total: number; max: number; pct: number; model: string } | null>(null);
+  const [ctxLive, setCtxLive] = useState<{
+    total: number; max: number; pct: number; model: string;
+    threshold: number | null; enabled: boolean;
+  } | null>(null);
   const ctx = ctxLive;
+
+  // SP12: comandos `/` disponibles (efímero, del init del worker). Toggle de
+  // verbosidad para ocultar eventos verbosos (hooks / desconocidos).
+  const [slashCmds, setSlashCmds] = useState<SlashCommand[]>([]);
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [showDetails, setShowDetails] = useState(false);
 
   // Mantener ref sincronizada con bubbles (para usar dentro del WS onEvent
   // sin provocar re-renders innecesarios).
@@ -269,21 +278,33 @@ export function SessionPage() {
       sid,
       {
         onEvent: (msg) => {
-          if (seenSeq.current.has(msg.seq)) return;
-          seenSeq.current.add(msg.seq);
-          // SP11: context_usage es efímero (no se persiste) — va a estado aparte.
-          if (msg.ui_event?.kind === "context_usage") {
-            const p = msg.ui_event.payload as {
-              total_tokens?: number; max_tokens?: number; percentage?: number; model?: string;
+          const kind = msg.ui_event?.kind;
+          // SP11/SP12: efímeros no-burbuja (seq=0 fijo). Se manejan ANTES del
+          // dedup por seq: si pasaran por seenSeq, solo el primero se
+          // procesaría y el resto (refresh de la barra, actualización de
+          // comandos) se perderían silenciosamente.
+          if (kind === "context_usage") {
+            const p = msg.ui_event!.payload as {
+              total_tokens?: number; max_tokens?: number; percentage?: number;
+              model?: string; auto_compact_threshold?: number | null; auto_compact_enabled?: boolean;
             };
             setCtxLive({
               total: Number(p.total_tokens ?? 0),
               max: Number(p.max_tokens ?? 0),
               pct: Number(p.percentage ?? 0),
               model: String(p.model ?? ""),
+              threshold: p.auto_compact_threshold == null ? null : Number(p.auto_compact_threshold),
+              enabled: Boolean(p.auto_compact_enabled),
             });
             return;
           }
+          if (kind === "slash_commands") {
+            const p = msg.ui_event!.payload as { commands?: SlashCommand[] };
+            setSlashCmds(Array.isArray(p.commands) ? p.commands : []);
+            return;
+          }
+          if (seenSeq.current.has(msg.seq)) return;
+          seenSeq.current.add(msg.seq);
           setBubbles((prev) => {
             const out = ingestEvent(prev, msg, streamRef.current);
             streamRef.current = out.stream;
@@ -320,11 +341,24 @@ export function SessionPage() {
     };
   }, [sid, sessQ.data]);
 
-  // Auto-scroll al fondo al cambiar el número de bubbles.
+  // SP12: auto-scroll suave. Solo "pega" al fondo si el usuario ya estaba
+  // cerca (si scrolleó arriba a leer, no le secuestramos la vista). Suave al
+  // aparecer un bubble nuevo; instantáneo mientras un bubble streamea (evita
+  // jank de animaciones encoladas por cada token).
+  const stickRef = useRef(true);
+  const lastLenRef = useRef(0);
+  const onScrollerScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
     const el = scrollerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [bubbles.length]);
+    if (!el || !stickRef.current) return;
+    const grew = bubbles.length !== lastLenRef.current;
+    lastLenRef.current = bubbles.length;
+    el.scrollTo({ top: el.scrollHeight, behavior: grew ? "smooth" : "auto" });
+  }, [bubbles]);
 
   const qc = useQueryClient();
   const sendMut = useMutation({
@@ -351,15 +385,12 @@ export function SessionPage() {
         },
         ts: new Date().toISOString(),
       };
+      stickRef.current = true; // al enviar, siempre seguimos al fondo
       setBubbles((prev) => {
         const out = ingestEvent(prev, stub, streamRef.current, turnId);
         streamRef.current = out.stream;
         return out.next;
       });
-      setTimeout(() => {
-        const el = scrollerRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-      }, 0);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["session", sid] }),
   });
@@ -395,6 +426,50 @@ export function SessionPage() {
       sendMut.mutate(text);
       setInput("");
     }
+  };
+
+  // SP12: menú `/`. Se abre mientras el input empieza por `/` y aún no hay
+  // espacio (se está tecleando el nombre del comando). Fuente: la lista que
+  // emitió el worker (get_server_info). "Ejecutar al elegir": enviar el comando.
+  const slashActive = input.startsWith("/") && !input.slice(1).includes(" ");
+  const slashQuery = slashActive ? input.slice(1).toLowerCase() : "";
+  const slashMatches = slashActive
+    ? slashCmds.filter((c) => c.name.toLowerCase().includes(slashQuery)).slice(0, 8)
+    : [];
+  const slashOpen = slashMatches.length > 0;
+  const slashSel = Math.min(slashIdx, slashMatches.length - 1);
+
+  const selectSlash = (cmd: SlashCommand) => {
+    sendMut.mutate(`/${cmd.name}`);
+    setInput("");
+    setSlashIdx(0);
+  };
+
+  const onInputKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
+    if (slashOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIdx((i) => (Math.min(i, slashMatches.length - 1) + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIdx((i) => (Math.min(i, slashMatches.length - 1) - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const pick = slashMatches[slashSel];
+        if (pick) selectSlash(pick);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setInput("");
+        return;
+      }
+    }
+    sendOnEnter(e);
   };
 
   return (
@@ -438,7 +513,18 @@ export function SessionPage() {
 
       <div className="session-layout">
         <section className="chat">
-          <div ref={scrollerRef} className="scroller">
+          <div className="chat-toolbar">
+            <label className="details-toggle" title="Muestra eventos verbosos (hooks, telemetría, tipos no reconocidos)">
+              <input
+                type="checkbox"
+                checked={showDetails}
+                onChange={(e) => setShowDetails(e.target.checked)}
+                data-testid="details-toggle"
+              />
+              mostrar detalles
+            </label>
+          </div>
+          <div ref={scrollerRef} className="scroller" onScroll={onScrollerScroll}>
             {bubbles.length === 0 && (
               <p style={{ color: "var(--muted)", padding: "0.5rem" }}>Esperando eventos…</p>
             )}
@@ -446,6 +532,7 @@ export function SessionPage() {
               <BubbleView
                 key={b.key}
                 bubble={b}
+                showDetails={showDetails}
                 onResolvePerm={(id, answer, option_index) =>
                 resolvePerm.mutate({ id, answer, option_index })
               }
@@ -465,6 +552,23 @@ export function SessionPage() {
               </span>
             </div>
           )}
+          {/* SP12: menú `/` — comandos reales del worker; se ejecuta al elegir. */}
+          {slashOpen && (
+            <div className="slash-menu" data-testid="slash-menu">
+              {slashMatches.map((c, i) => (
+                <button
+                  type="button"
+                  key={c.name}
+                  className={`slash-item${i === slashSel ? " active" : ""}`}
+                  onMouseEnter={() => setSlashIdx(i)}
+                  onClick={() => selectSlash(c)}
+                >
+                  <code>/{c.name}</code>
+                  {c.description && <span className="slash-desc">{c.description}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <form
             className="input-bar"
             onSubmit={(e) => {
@@ -478,7 +582,7 @@ export function SessionPage() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={sendOnEnter}
+              onKeyDown={onInputKeyDown}
               placeholder={
                 sess.status === "starting" && !bootStep.ready
                   ? "Esperando que el worker esté listo…"
@@ -510,9 +614,22 @@ export function SessionPage() {
                     background: ctx.pct >= 90 ? "var(--err-fg)" : ctx.pct >= 70 ? "#e3b341" : "var(--accent)",
                   }}
                 />
+                {/* SP12: marcador del umbral de auto-compact. */}
+                {ctx.threshold != null && ctx.threshold > 0 && ctx.threshold < 100 && (
+                  <div
+                    className="ctx-bar-threshold"
+                    style={{ left: `${ctx.threshold}%` }}
+                    title={`auto-compact ~${ctx.threshold}%${ctx.enabled ? "" : " (deshabilitado)"}`}
+                  />
+                )}
               </div>
               <span className="ctx-bar-numbers">
                 {(ctx.total / 1000).toFixed(1)}k / {(ctx.max / 1000).toFixed(0)}k ({ctx.pct.toFixed(0)}%)
+                {ctx.threshold != null && ctx.threshold > 0 ? (
+                  <span className="ctx-bar-threshold-num" title="umbral de auto-compact">
+                    {" "}⚡{ctx.threshold}%
+                  </span>
+                ) : null}
               </span>
             </div>
           )}
@@ -560,10 +677,12 @@ export function SessionPage() {
 
 function BubbleView({
   bubble,
+  showDetails,
   onResolvePerm,
   resolving,
 }: {
   bubble: Bubble;
+  showDetails: boolean;
   onResolvePerm: (
     id: string,
     answer: "allow" | "allow_always" | "deny",
@@ -581,7 +700,7 @@ function BubbleView({
       return (
         <div className="bubble agent-text">
           <span style={{ whiteSpace: "pre-wrap" }}>{text}</span>
-          {streaming && !text.endsWith("▍") ? <span style={{ opacity: 0.5 }}>▍</span> : null}
+          {streaming && !text.endsWith("▍") ? <span className="stream-cursor">▍</span> : null}
         </div>
       );
     }
@@ -595,10 +714,13 @@ function BubbleView({
     case "tool_call": {
       const awaiting = Boolean(p.awaiting_permission);
       const hasResult = Boolean(bubble.result);
+      const serverTool = p.server_tool ? String(p.server_tool) : "";
       return (
         <div className="bubble tool-call">
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            {serverTool && <span title={`server tool: ${serverTool}`}>🌐</span>}
             <code>{String(p.name ?? "")}</code>
+            {serverTool && <span className="tag">server</span>}
             {awaiting && <span className="tag warn">esperando permiso</span>}
             {hasResult && <span style={{ opacity: 0.6, fontSize: "0.85em" }}>(resultado ↓)</span>}
           </div>
@@ -651,24 +773,6 @@ function BubbleView({
             <div className="tag ok" style={{ marginTop: "0.3rem" }}>{outcomeTag}</div>
           ) : (
             <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-              {!isQuestion && (
-                <>
-                  <button
-                    className="primary"
-                    onClick={() => onResolvePerm(id, "allow")}
-                    disabled={resolving}
-                  >
-                    Permitir
-                  </button>
-                  <button
-                    className="danger"
-                    onClick={() => onResolvePerm(id, "deny")}
-                    disabled={resolving}
-                  >
-                    Denegar
-                  </button>
-                </>
-              )}
               {!isQuestion && (
                 <>
                   <button
@@ -755,9 +859,67 @@ function BubbleView({
       return (
         <div className="bubble error">{String(p.message ?? "error")}</div>
       );
+    case "compact": {
+      const pre = p.pre_tokens ? Number(p.pre_tokens) : null;
+      return (
+        <div className="bubble compact" data-testid="bubble-compact">
+          <span>✂ contexto compactado</span>
+          {pre ? <span style={{ opacity: 0.7 }}> · antes {(pre / 1000).toFixed(0)}k tokens</span> : null}
+          {p.trigger ? <span style={{ opacity: 0.7 }}> · {String(p.trigger)}</span> : null}
+        </div>
+      );
+    }
+    case "rate_limit": {
+      const util = p.utilization != null ? Number(p.utilization) : null;
+      return (
+        <div className="bubble rate-limit" data-testid="bubble-rate-limit">
+          <strong>⏳ límite de tasa</strong>{" "}
+          {p.status ? <span>· {String(p.status)}</span> : null}
+          {util != null ? <span> · uso {(util * 100).toFixed(0)}%</span> : null}
+          {p.resets_at ? <span style={{ opacity: 0.7 }}> · resetea {String(p.resets_at)}</span> : null}
+        </div>
+      );
+    }
+    case "task": {
+      const desc = String(p.description ?? p.summary ?? "");
+      const status = String(p.status ?? p.subtype ?? "");
+      return (
+        <div className="bubble task" data-testid="bubble-task">
+          <span>◈ subagente</span>
+          {status ? <span className="tag">{status}</span> : null}
+          {desc ? <span style={{ opacity: 0.85 }}> {desc}</span> : null}
+          {p.last_tool_name ? (
+            <span style={{ opacity: 0.6, fontSize: "0.85em" }}> · {String(p.last_tool_name)}</span>
+          ) : null}
+        </div>
+      );
+    }
+    case "hook": {
+      // Verboso: solo con el toggle "mostrar detalles".
+      if (!showDetails) return null;
+      return (
+        <details className="bubble hook">
+          <summary>hook: {String(p.hook_event_name ?? p.subtype ?? "")}</summary>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(p.data ?? {}, null, 2)}</pre>
+        </details>
+      );
+    }
     case "tool_result":
     case "permission_resolved":
+    case "context_usage":
+    case "slash_commands":
       return null;
+    default: {
+      // Catch-all: ningún tipo del SDK desaparece en silencio. Verboso →
+      // solo con el toggle. Muestra el JSON crudo del UIEvent.
+      if (!showDetails) return null;
+      return (
+        <details className="bubble unknown" data-testid="bubble-unknown">
+          <summary>evento SDK: {String(ui.kind)}</summary>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(p ?? {}, null, 2)}</pre>
+        </details>
+      );
+    }
   }
 }
 

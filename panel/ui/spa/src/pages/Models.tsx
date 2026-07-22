@@ -11,6 +11,8 @@ interface ModelProfile {
   provider: "anthropic" | "minimax" | "custom";
   base_url: string | null;
   model: string;
+  max_context_tokens: number | null;
+  auto_compact_threshold: number | null;
   has_token: boolean;
   updated_at: string;
 }
@@ -181,6 +183,8 @@ function ModelFormModal({
   const [provider, setProvider] = useState<typeof PROVIDERS[number]>(model?.provider ?? "anthropic");
   const [modelName, setModelName] = useState(model?.model ?? "");
   const [baseUrl, setBaseUrl] = useState(model?.base_url ?? "");
+  const [maxCtx, setMaxCtx] = useState(model?.max_context_tokens?.toString() ?? "");
+  const [autoCompact, setAutoCompact] = useState(model?.auto_compact_threshold?.toString() ?? "");
   const [token, setToken] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -212,6 +216,8 @@ function ModelFormModal({
       provider,
       model: modelName.trim(),
       base_url: baseUrl.trim() || null,
+      max_context_tokens: maxCtx.trim() ? Number(maxCtx.trim()) : null,
+      auto_compact_threshold: autoCompact.trim() ? Number(autoCompact.trim()) : null,
     };
     if (mode === "create") {
       body.auth_token = token.trim() || null;
@@ -247,6 +253,23 @@ function ModelFormModal({
         placeholder="e.g. https://api.minimax.io/anthropic"
         value={baseUrl}
         onChange={(e) => setBaseUrl(e.target.value)}
+      />
+      <label>Máx. contexto en tokens (opcional — corrige la barra de contexto)</label>
+      <input
+        type="number"
+        min={1}
+        placeholder="e.g. 200000"
+        value={maxCtx}
+        onChange={(e) => setMaxCtx(e.target.value)}
+      />
+      <label>Umbral de auto-compact % (opcional, 1-100)</label>
+      <input
+        type="number"
+        min={1}
+        max={100}
+        placeholder="e.g. 80"
+        value={autoCompact}
+        onChange={(e) => setAutoCompact(e.target.value)}
       />
       <label>
         {mode === "create" ? "Token (write-only — no se muestra tras guardar)" : "Nuevo token (vacío = mantener actual)"}

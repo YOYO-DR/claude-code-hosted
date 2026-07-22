@@ -28,6 +28,12 @@ class ModelProfile(TimestampedModel):
     auth_token_enc = models.BinaryField(null=True, blank=True)  # Fernet
     model = models.CharField(max_length=200)
     extra_env = models.JSONField(default=dict, blank=True)
+    # SP12: contexto por modelo. `max_context_tokens` corrige el denominador de
+    # la barra de contexto cuando el proveedor (p.ej. MiniMax) reporta un max
+    # incorrecto. `auto_compact_threshold` (% 1-100) marca dónde dispara el
+    # auto-compact. null = usar el default que reporte el SDK.
+    max_context_tokens = models.PositiveIntegerField(null=True, blank=True)
+    auto_compact_threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.name

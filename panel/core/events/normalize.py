@@ -43,7 +43,10 @@ from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
+    RateLimitEvent,
     ResultMessage,
+    ServerToolResultBlock,
+    ServerToolUseBlock,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -98,6 +101,19 @@ class StreamAccumulator:
     def __init__(self) -> None:
         # content_block_index -> {kind: "text"|"thinking", text: str}
         self._blocks: dict[int, dict[str, Any]] = {}
+        # ¿Se emitió algún delta desde el último reset_turn()? Lo usa el worker
+        # para no re-publicar en vivo el bloque macro agent_text/agent_thinking
+        # (ya visto por streaming) y evitar burbuja doble. Si el proveedor no
+        # soporta partial messages (p.ej. MiniMax), queda False y el macro sí
+        # se publica para que el texto aparezca en vivo.
+        self._produced = False
+
+    def reset_turn(self) -> None:
+        """Inicio de turno: olvida si hubo streaming previo."""
+        self._produced = False
+
+    def produced_this_turn(self) -> bool:
+        return self._produced
 
     def feed_stream(self, ev: dict[str, Any]) -> list[UIEvent]:
         """Procesa un StreamEvent.event (dict estilo Anthropic) y devuelve 0+
@@ -138,6 +154,8 @@ class StreamAccumulator:
             idx = ev.get("index")
             if idx is not None:
                 self._blocks.pop(idx, None)
+        if out:
+            self._produced = True
         return out
 
 
@@ -167,16 +185,59 @@ def normalize_sdk_message(
                 "mcp_servers": (msg.data or {}).get("mcp_servers") or [],
                 "cwd": (msg.data or {}).get("cwd"),
             }))
-        elif st in ("thinking_tokens", "compact_boundary"):
-            # Telemetría/estado: NO burbuja. Se persiste como crudo pero no
-            # emite UIEvent (alimenta métricas fuera de banda).
+        elif st == "compact_boundary":
+            # El SDK compactó el contexto. Divisor visible en el chat.
+            data = msg.data or {}
+            meta = data.get("compact_metadata") or {}
+            out.append(_ev(seq, session_id, "compact", {
+                "pre_tokens": data.get("pre_tokens") or meta.get("pre_tokens"),
+                "trigger": data.get("trigger") or meta.get("trigger"),
+            }))
+        elif st == "thinking_tokens":
+            # Telemetría pura (conteo de tokens de thinking): sin burbuja.
             return out
+        elif st == "mirror_error":
+            # Error sintetizado por el SDK (no viene del CLI).
+            out.append(_ev(seq, session_id, "error", {
+                "message": str(
+                    getattr(msg, "error", None)
+                    or (msg.data or {}).get("error")
+                    or "mirror_error"
+                ),
+                "fatal": False,
+                "source": "mirror",
+            }))
+        elif st in ("task_started", "task_progress", "task_notification", "task_updated"):
+            # Progreso de subagentes (Task tool). Línea compacta con estado.
+            out.append(_ev(seq, session_id, "task", {
+                "subtype": st,
+                "task_id": getattr(msg, "task_id", None),
+                "description": getattr(msg, "description", None),
+                "status": getattr(msg, "status", None),
+                "summary": getattr(msg, "summary", None),
+                "last_tool_name": getattr(msg, "last_tool_name", None),
+            }))
+        elif st in ("hook_started", "hook_response"):
+            # Verboso (toggle "mostrar detalles" en el front).
+            out.append(_ev(seq, session_id, "hook", {
+                "subtype": st,
+                "hook_event_name": getattr(msg, "hook_event_name", None),
+                "data": msg.data or {},
+            }))
         else:
             out.append(_ev(seq, session_id, "session_status", {
                 "status": st, "data": msg.data or {},
             }))
 
     elif isinstance(msg, AssistantMessage):
+        # Error a nivel de mensaje (auth/billing/rate_limit/server del proveedor).
+        err = getattr(msg, "error", None)
+        if err:
+            out.append(_ev(seq, session_id, "error", {
+                "message": f"error del modelo: {err}",
+                "code": str(err),
+                "fatal": err in ("authentication_failed", "billing_error"),
+            }))
         # Un assistant puede traer varios bloques (text + thinking + tool_use).
         for block in msg.content or []:
             if isinstance(block, TextBlock):
@@ -187,12 +248,16 @@ def normalize_sdk_message(
                 out.append(_ev(seq, session_id, "agent_thinking", {
                     "text": block.thinking,
                 }))
-            elif isinstance(block, ToolUseBlock):
+            elif isinstance(block, (ToolUseBlock, ServerToolUseBlock)):
                 payload: dict[str, Any] = {
                     "tool_use_id": block.id,
                     "name": block.name,
                     "input": _json_safe(block.input),
                 }
+                # Server-tool (web_search, web_fetch, code_execution, …): ícono
+                # propio en el front vía payload.server_tool.
+                if isinstance(block, ServerToolUseBlock):
+                    payload["server_tool"] = str(block.name)
                 # Si el worker tiene el mapa, lo marcamos como pendiente de
                 # aprobación (el front sabrá que es bloqueante si ve luego
                 # un permission_request con el mismo tool_use_id).
@@ -207,6 +272,14 @@ def normalize_sdk_message(
                     "ok": not block.is_error,
                     "output": _coerce_output(block.content),
                     "truncated": False,
+                }))
+            elif isinstance(block, ServerToolResultBlock):
+                out.append(_ev(seq, session_id, "tool_result", {
+                    "tool_use_id": block.tool_use_id,
+                    "ok": True,
+                    "output": _coerce_output(block.content),
+                    "truncated": False,
+                    "server_tool": True,
                 }))
             else:
                 # Bloque desconocido: degradar a tool_call genérico.
@@ -253,6 +326,16 @@ def normalize_sdk_message(
             "summary": msg.result or "",
             "duration_ms": msg.duration_ms,
             "stop_reason": msg.stop_reason,
+        }))
+
+    elif isinstance(msg, RateLimitEvent):
+        info = msg.rate_limit_info
+        out.append(_ev(seq, session_id, "rate_limit", {
+            "status": getattr(info, "status", None),
+            "resets_at": _json_safe(getattr(info, "resets_at", None)),
+            "rate_limit_type": getattr(info, "rate_limit_type", None),
+            "utilization": getattr(info, "utilization", None),
+            "overage_status": getattr(info, "overage_status", None),
         }))
 
     else:

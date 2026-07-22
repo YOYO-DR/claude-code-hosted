@@ -155,6 +155,59 @@ def test_system_thinking_tokens_emits_no_uievent():
     assert out == []
 
 
+def test_system_compact_boundary_emits_compact():
+    """SP12: compact_boundary → divisor `compact` (antes se tragaba)."""
+    msg = SystemMessage(subtype="compact_boundary", data={
+        "compact_metadata": {"pre_tokens": 150000, "trigger": "auto"},
+    })
+    out = normalize_sdk_message(msg, seq=1, session_id="s1")
+    assert len(out) == 1
+    assert out[0].kind == "compact"
+    assert out[0].payload["pre_tokens"] == 150000
+    assert out[0].payload["trigger"] == "auto"
+
+
+def test_rate_limit_event_emits_rate_limit():
+    """SP12: RateLimitEvent → kind `rate_limit`."""
+    from claude_agent_sdk import RateLimitEvent, RateLimitInfo
+
+    info = RateLimitInfo(
+        status="allowed_warning", resets_at=None, rate_limit_type="tokens",
+        utilization=0.82, overage_status=None, overage_resets_at=None,
+        overage_disabled_reason=None, raw={},
+    )
+    msg = RateLimitEvent(rate_limit_info=info, uuid="u", session_id="s1")
+    out = normalize_sdk_message(msg, seq=1, session_id="s1")
+    assert len(out) == 1
+    assert out[0].kind == "rate_limit"
+    assert out[0].payload["utilization"] == 0.82
+
+
+def test_assistant_server_tool_use_marks_server_tool():
+    """SP12: ServerToolUseBlock (web_search, …) → tool_call con server_tool."""
+    from claude_agent_sdk import ServerToolUseBlock
+
+    msg = AssistantMessage(
+        content=[ServerToolUseBlock(id="st1", name="web_search", input={"q": "x"})],
+        model="MiniMax-M3", session_id="s1",
+    )
+    out = normalize_sdk_message(msg, seq=1, session_id="s1")
+    assert len(out) == 1
+    assert out[0].kind == "tool_call"
+    assert out[0].payload["server_tool"] == "web_search"
+
+
+def test_assistant_message_error_emits_error():
+    """SP12: AssistantMessage.error (auth/billing/…) se surface como `error`."""
+    msg = AssistantMessage(
+        content=[], model="MiniMax-M3", session_id="s1", error="authentication_failed",
+    )
+    out = normalize_sdk_message(msg, seq=1, session_id="s1")
+    assert len(out) == 1
+    assert out[0].kind == "error"
+    assert out[0].payload["fatal"] is True
+
+
 def test_assistant_text_block_emits_agent_text():
     msg = AssistantMessage(
         content=[TextBlock(text="Hola mundo")],
