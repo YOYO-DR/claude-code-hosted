@@ -43,7 +43,7 @@ def create_request(
 
 
 def serialize_request(req: PermissionRequest) -> dict:
-    return {
+    out = {
         "id": str(req.id),
         "session": str(req.session_id),
         "tool": req.tool,
@@ -51,6 +51,14 @@ def serialize_request(req: PermissionRequest) -> dict:
         "status": req.status,
         "expires_at": req.expires_at.isoformat(),
     }
+    # SP9.1: las preguntas del agente (Claude Code AskUserQuestion tool)
+    # llegan con input_full estructurado. Lo propagamos para que la SPA
+    # pueda renderizar las opciones como botones cliqueables (no solamente
+    # el preview). Para Bash/Edit/Write el input_full suele ser un command
+    # string y exponerlo duplica info — solo lo enviamos en preguntas.
+    if req.tool == "AskUserQuestion" and isinstance(req.input_full, dict):
+        out["input_full"] = req.input_full
+    return out
 
 
 def apply_answer(
@@ -226,21 +234,40 @@ def resolve_atomically(
         return True, req
 
 
-def claim_answer_sync(redis_client, request_id: str, answer: str, source: str = "web") -> bool:
-    """Escribe la respuesta con SET NX, codificando el origen como `answer|source`.
-    True si este llamador la reclamó; False si otro ya respondió (conflicto)."""
+def claim_answer_sync(
+    redis_client,
+    request_id: str,
+    answer: str,
+    source: str = "web",
+    option_index: int | None = None,
+) -> bool:
+    """Escribe la respuesta con SET NX, codificando el origen como
+    `answer|source[|opt:N]`. El último token solo aparece si la SPA eligió
+    una opción de AskUserQuestion (SP9.1)."""
     if answer not in {"allow", "deny", "allow_always"}:
         raise ValueError(f"respuesta inválida: {answer}")
-    value = f"{answer}|{source}"
+    if option_index is not None:
+        value = f"{answer}|{source}|opt:{option_index}"
+    else:
+        value = f"{answer}|{source}"
     return bool(redis_client.set(bus.key_answer(request_id), value, nx=True, ex=bus.ANSWER_TTL))
 
 
-def _split_answer(raw: str | None) -> tuple[str, str]:
-    """`answer|source` → (answer, source). Tolera valores legacy sin origen."""
+def _split_answer(raw: str | None) -> tuple[str, str, int | None]:
+    """`answer|source[|opt:N]` → (answer, source, option_index). Tolera
+    valores legacy sin origen ni option."""
     if not raw:
-        return "timeout", "web"
-    answer, sep, source = raw.partition("|")
-    return answer, (source if sep else "web")
+        return "timeout", "web", None
+    parts = raw.split("|")
+    answer = parts[0] or "timeout"
+    source = parts[1] if len(parts) > 1 else "web"
+    option_index: int | None = None
+    if len(parts) > 2 and parts[2].startswith("opt:"):
+        try:
+            option_index = int(parts[2].split(":", 1)[1])
+        except ValueError:
+            option_index = None
+    return answer, source, option_index
 
 
 POLL_INTERVAL = 0.5  # s; cada cuánto sondea el worker la respuesta
@@ -284,16 +311,31 @@ async def request_and_wait(
     req = await sync_to_async(create_request)(session, tool_name, effective, timeout_s)
     await aredis.publish(bus.key_perm(str(session.id)), json.dumps(serialize_request(req)))
     raw = await _wait_answer(aredis, str(req.id), timeout_s, poll_interval)
-    answer, source = _split_answer(raw)
+    answer, source, option_index = _split_answer(raw)
     final = answer if answer in {"allow", "allow_always", "deny"} else "timeout"
+    # SP9.1: si la SPA eligió una opción de AskUserQuestion, inyectamos
+    # la respuesta en el input efectivo que verá el SDK como updated_input.
+    if (
+        tool_name == "AskUserQuestion"
+        and option_index is not None
+        and isinstance(effective, dict)
+    ):
+        effective = {**effective, "answer": int(option_index)}
+        changed = True
     await sync_to_async(apply_answer)(req, final, source=source, always_rules=always_rules)
     # Notifica la resolución (cualquier origen) para que el tg_bridge edite el
     # mensaje de Telegram y quite el teclado (§4.6). Best-effort.
+    payload = json.dumps({"request_id": str(req.id), "outcome": final, "source": source})
     try:
-        await aredis.publish(
-            bus.key_perm_resolved(),
-            json.dumps({"request_id": str(req.id), "outcome": final}),
-        )
+        # Global: tg_bridge edita el mensaje de Telegram.
+        await aredis.publish(bus.key_perm_resolved(), payload)
+    except Exception:  # noqa: BLE001
+        pass
+    # SP9.2: session-scoped, además. El WS del chat se suscribe aquí para
+    # enterar a la SPA de la resolución (sea por web o por Telegram) y poder
+    # actualizar el bubble (deshabilitar botones, mostrar "✓ Permitido").
+    try:
+        await aredis.publish(bus.key_perm_resolved_session(str(session.id)), payload)
     except Exception:  # noqa: BLE001
         pass
     return final, effective, changed, req

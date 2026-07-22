@@ -209,3 +209,45 @@ async def test_perm_message_with_missing_id_is_dropped(
     # Nada en 0.5s — el consumer lo descarta.
     with pytest.raises(_aio.TimeoutError):
         await comm.receive_from(timeout=0.5)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_perm_resolved_sidecar_does_not_become_bubble(
+    monkeypatch, django_user_model
+):
+    """SP9.2: cuando alguien (Telegram o web) resuelve un permiso, el consumer
+    emite un sidecar `_channel: 'perm_resolved'` con id+outcome, NO un
+    bubble. El cliente lo trata como callback (deshabilita botones, muestra
+    desenlace), no como evento de stream."""
+    from channels.db import database_sync_to_async
+
+    _patch_fake_redis(monkeypatch)
+    session = await database_sync_to_async(_make_session)()
+    sid = str(session.id)
+    user = await database_sync_to_async(django_user_model.objects.create_user)(
+        username="res-u", password="x"
+    )
+
+    comm = await _connect(sid, last_seq=0)
+    comm.scope["user"] = user
+    connected, _ = await comm.connect()
+    assert connected
+    import asyncio as _aio
+    await _aio.sleep(0.1)
+
+    fake_redis = consumers.make_redis()
+    request_id = "11111111-2222-3333-4444-555555555555"
+    await fake_redis.publish(
+        bus.key_perm_resolved_session(sid),
+        json.dumps({"request_id": request_id, "outcome": "allow", "source": "telegram"}),
+    )
+    msg = json.loads(await comm.receive_from(timeout=3))
+    await comm.disconnect()
+
+    assert msg["_channel"] == "perm_resolved"
+    assert msg["id"] == request_id
+    assert msg["outcome"] == "allow"
+    assert msg["source"] == "telegram"
+    # NO debe tener seq, type, payload ni ui_event — no es un evento de stream.
+    assert "seq" not in msg
+    assert "ui_event" not in msg

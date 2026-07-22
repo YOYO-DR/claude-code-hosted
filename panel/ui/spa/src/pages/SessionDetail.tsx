@@ -33,6 +33,9 @@ interface Bubble {
   ui: UIEvent | null;
   result?: RawEventMessage;
   groupKey: string;
+  /** SP9.2: si el permiso ya está resuelto (vía web o Telegram),
+   * deshabilitamos los botones y mostramos el outcome en su lugar. */
+  resolved?: { outcome: string; source: string };
 }
 
 // Estado de stream compartido: deltas consecutivos del mismo kind
@@ -267,6 +270,22 @@ export function SessionPage() {
             return out.next;
           });
         },
+        // SP9.2: el perm_resolved sidecar llega por WS — mapea al bubble
+        // pendiente por su id de perm request y lo marca como resuelto (los
+        // botones se deshabilitan y aparece el desenlace, venga de web o
+        // Telegram, indistinguible al usuario).
+        onPermResolved: ({ id, outcome, source }) => {
+          setBubbles((prev) => {
+            const idx = prev.findIndex(
+              (b) => b.kind === "permission_request" &&
+                String((b.ui?.payload as { id?: string })?.id ?? "") === id,
+            );
+            if (idx < 0) return prev;
+            const copy = prev.slice();
+            copy[idx] = { ...copy[idx], resolved: { outcome, source } };
+            return copy;
+          });
+        },
         onStateChange: setWsState,
       },
       // last_seq = max visto (0 al inicio = WS envía todo y dedup filtra)
@@ -329,8 +348,20 @@ export function SessionPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["session", sid] }),
   });
   const resolvePerm = useMutation({
-    mutationFn: ({ id, answer }: { id: string; answer: "allow" | "deny" }) =>
-      api(`/api/v1/permissions/${id}/resolve/`, { method: "POST", body: { answer } }),
+    mutationFn: ({ id, answer, option_index }: {
+      id: string;
+      answer: "allow" | "deny";
+      // SP9.1: si la SPA eligió una opción de AskUserQuestion, lo propaga al
+      // worker en updated_input.answer (campo del payload). El worker lo
+      // devuelve al SDK vía PermissionResultAllow(updated_input=...).
+      option_index?: number;
+    }) =>
+      api(`/api/v1/permissions/${id}/resolve/`, {
+        method: "POST",
+        body: option_index !== undefined
+          ? { answer, option_index }
+          : { answer },
+      }),
   });
 
   if (!sid) return <p className="msg error">URL inválida — falta session id.</p>;
@@ -398,7 +429,9 @@ export function SessionPage() {
               <BubbleView
                 key={b.key}
                 bubble={b}
-                onResolvePerm={(id, answer) => resolvePerm.mutate({ id, answer })}
+                onResolvePerm={(id, answer, option_index) =>
+                resolvePerm.mutate({ id, answer, option_index })
+              }
                 resolving={resolvePerm.isPending}
               />
             ))}
@@ -472,7 +505,10 @@ export function SessionPage() {
               </button>
             ))}
           </div>
-          <div style={{ minHeight: 200 }}>
+          <div
+            className="sidebar-tab-content"
+            style={{ minHeight: 200 }}
+          >
             {tab === "archivos" && <ProjectTree slug={sess.project_slug} />}
             {tab === "cambios" && <ProjectDiff slug={sess.project_slug} />}
             {tab === "rama" && (
@@ -491,7 +527,11 @@ function BubbleView({
   resolving,
 }: {
   bubble: Bubble;
-  onResolvePerm: (id: string, answer: "allow" | "deny") => void;
+  onResolvePerm: (
+    id: string,
+    answer: "allow" | "deny",
+    option_index?: number,
+  ) => void;
   resolving: boolean;
 }) {
   const ui = bubble.ui;
@@ -541,6 +581,28 @@ function BubbleView({
       );
     case "permission_request": {
       const id = String(p.id ?? "");
+      const r = bubble.resolved;
+      const outcomeTag =
+        r?.outcome === "allow" || r?.outcome === "allow_always"
+          ? `✓ ${r.outcome === "allow_always" ? "Permitido siempre" : "Permitido"}${r.source ? ` · ${r.source}` : ""}`
+          : r?.outcome === "deny"
+            ? `✗ Denegado${r.source ? ` · ${r.source}` : ""}`
+            : r?.outcome === "timeout"
+              ? "⏱ Expirado sin respuesta"
+              : null;
+      // SP9.1: las preguntas del agente (AskUserQuestion) llegan como tool_name
+      // "AskUserQuestion" con input estructurado (question + options).
+      // Renderizamos cada opción como botón cliqueable. La elegida viaja al
+      // worker vía option_index → updated_input.
+      const isQuestion = String(p.tool ?? "") === "AskUserQuestion";
+      const inputFull = (p.input_full ?? {}) as {
+        question?: string;
+        options?: Array<{ label: string; description?: string; preview?: string }>;
+        header?: string;
+      };
+      const options = isQuestion && Array.isArray(inputFull.options)
+        ? inputFull.options
+        : [];
       return (
         <div className="bubble permission-request">
           <div>
@@ -548,22 +610,55 @@ function BubbleView({
             <span style={{ opacity: 0.6, fontSize: "0.85em" }}>· id={id.slice(0, 8)}</span>
           </div>
           <pre>{String(p.input_preview ?? "")}</pre>
-          <div style={{ display: "flex", gap: "0.4rem" }}>
-            <button
-              className="primary"
-              onClick={() => onResolvePerm(id, "allow")}
-              disabled={resolving}
-            >
-              Permitir
-            </button>
-            <button
-              className="danger"
-              onClick={() => onResolvePerm(id, "deny")}
-              disabled={resolving}
-            >
-              Denegar
-            </button>
-          </div>
+          {outcomeTag ? (
+            <div className="tag ok" style={{ marginTop: "0.3rem" }}>{outcomeTag}</div>
+          ) : (
+            <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+              {!isQuestion && (
+                <>
+                  <button
+                    className="primary"
+                    onClick={() => onResolvePerm(id, "allow")}
+                    disabled={resolving}
+                  >
+                    Permitir
+                  </button>
+                  <button
+                    className="danger"
+                    onClick={() => onResolvePerm(id, "deny")}
+                    disabled={resolving}
+                  >
+                    Denegar
+                  </button>
+                </>
+              )}
+              {isQuestion && options.length > 0 && options.map((o, i) => (
+                <button
+                  key={i}
+                  className="primary"
+                  disabled={resolving}
+                  onClick={() => onResolvePerm(id, "allow", i)}
+                  title={o.description || o.label}
+                >
+                  {o.label}
+                </button>
+              ))}
+              {isQuestion && (
+                <button
+                  className="danger"
+                  disabled={resolving}
+                  onClick={() => onResolvePerm(id, "deny")}
+                >
+                  Denegar
+                </button>
+              )}
+            </div>
+          )}
+          {isQuestion && inputFull.question && (
+            <p style={{ margin: "0.3rem 0 0", fontStyle: "italic" }}>
+              {inputFull.question}
+            </p>
+          )}
         </div>
       );
     }

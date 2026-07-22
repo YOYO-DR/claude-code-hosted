@@ -47,19 +47,22 @@ def resolve_permission(request: HttpRequest, perm_id: str) -> JsonResponse:
     answer = body.get("answer")
     if answer not in {"allow", "deny", "allow_always"}:
         return JsonResponse({"error": "answer inválido"}, status=400)
+    option_index = body.get("option_index")
+    if option_index is not None:
+        if not isinstance(option_index, int) or option_index < 0:
+            return JsonResponse({"error": "option_index debe ser int >= 0"}, status=400)
     try:
         claimed, req = perm_svc.resolve_atomically(perm_id, answer, source="web")
     except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     if not claimed:
         return JsonResponse({"ok": False, "conflict": True}, status=409)
-    # Notificar al worker por Redis (igual que la vista legacy).
     import redis
     from django.conf import settings
 
     client = redis.from_url(settings.REDIS_URL)
     try:
-        perm_svc.claim_answer_sync(client, perm_id, answer, source="web")
+        perm_svc.claim_answer_sync(client, perm_id, answer, source="web", option_index=option_index)
     finally:
         client.close()
     return JsonResponse({"ok": True, "status": req.status if req else None})

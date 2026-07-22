@@ -26,6 +26,14 @@ def key_perm_resolved() -> str:
     return "perm:resolved"
 
 
+def key_perm_resolved_session(sid: str) -> str:
+    """SP9.2: canal session-scoped. Misma carga útil + misma audiencia (también
+    tg_bridge si se quiere), pero permite que el WS de UNA sesión se entere
+    de sus propias resoluciones sin tener que filtrar el global por
+    request_id+DB lookup cada vez."""
+    return f"session:{sid}:perm:resolved"
+
+
 def key_heartbeat(sid: str) -> str:
     return f"worker:{sid}:heartbeat"
 

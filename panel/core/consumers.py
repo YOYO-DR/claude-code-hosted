@@ -57,7 +57,12 @@ class SessionConsumer(AsyncWebsocketConsumer):
         self._dedup = SeqDedup(last_seq)
         self._redis = make_redis()
         self._pubsub = self._redis.pubsub()
-        await self._pubsub.subscribe(bus.key_out(self.sid), bus.key_perm(self.sid))
+        await self._pubsub.subscribe(
+            bus.key_out(self.sid),
+            bus.key_perm(self.sid),
+            # SP9.2: resoluciones de permisos para ESTA sesión (web + Telegram).
+            bus.key_perm_resolved_session(self.sid),
+        )
         # Suscribirse ANTES de leer el backlog evita perder eventos que lleguen
         # en medio; los solapados los filtra SeqDedup por seq.
         self._reader = asyncio.create_task(self._read_pubsub())
@@ -151,6 +156,11 @@ class SessionConsumer(AsyncWebsocketConsumer):
                     "tool": data.get("tool", ""),
                     "input_preview": data.get("input_preview", ""),
                 }
+                # SP9.1: si llega input_full (solo AskUserQuestion), lo
+                # propagamos en el UIEvent para que el SPA pueda renderizar
+                # las opciones estructuradas.
+                if data.get("input_full") is not None:
+                    payload["input_full"] = data["input_full"]
                 msg = {
                     "seq": _perm_seq(perm_id),
                     "type": "permission_request",
@@ -168,6 +178,18 @@ class SessionConsumer(AsyncWebsocketConsumer):
                     "id": perm_id,
                 }
                 await self.send(text_data=json.dumps(msg))
+            elif channel == bus.key_perm_resolved_session(self.sid):
+                # SP9.2: notificación de resolución (web o Telegram). Liviano:
+                # NO es RawEventMessage con seq, es un "sidecar" que el cliente
+                # usa para actualizar el bubble (deshabilitar botones, mostrar
+                # el outcome). `id` distingue para no re-aplicar dos veces si
+                # llegara repetido.
+                await self.send(text_data=json.dumps({
+                    "_channel": "perm_resolved",
+                    "id": str(data.get("request_id") or ""),
+                    "outcome": str(data.get("outcome") or ""),
+                    "source": str(data.get("source") or ""),
+                }))
 
     def _query_param(self, name: str, default: str) -> str:
         qs = self.scope.get("query_string", b"").decode()

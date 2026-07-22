@@ -182,6 +182,14 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 @media (max-width: 900px) {
   .session-layout { grid-template-columns: 1fr; }
 }
+
+/* SP9.3: el panel lateral (archivos / cambios / rama) crecía sin límite y
+   empujaba el chat arriba. Lo capamos a la misma altura que .chat (60vh)
+   y dejamos scroll vertical dentro del tab activo. */
+.sidebar-tab-content {
+  max-height: 60vh;
+  overflow-y: auto;
+}
 .chat {
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -36,6 +36,9 @@ export interface SessionWsClient {
 export interface SessionWsHandlers {
   onEvent: (ev: RawEventMessage) => void;
   onStateChange?: (state: ConnectionState) => void;
+  /** SP9.2: opcional. Disparado cuando llega un mensaje `_channel: "perm_resolved"` —
+   * actualiza el bubble (deshabilita botones, muestra "✓ Permitido"). */
+  onPermResolved?: (info: { id: string; outcome: string; source: string }) => void;
 }
 
 export function openSessionWs(
@@ -75,9 +78,24 @@ export function openSessionWs(
         const data = JSON.parse(ev.data) as RawEventMessage & {
           _channel?: string;
           id?: string;
+          outcome?: string;
+          source?: string;
         };
-        // SP7: dedupe por id para mensajes perm (cada uno es una aprobación
-        // discreta); por seq para el resto del stream.
+        // SP9.2: sidecar de resolución — NO es parte del stream de eventos.
+        // Va por su propio callback para que la SPA deshabilite los botones
+        // del bubble pendiente. Dedupe por id (server publishes can deliver
+        // duplicates si Telegram publica y la vista web también).
+        if (data._channel === "perm_resolved") {
+          if (!data.id) return;
+          if (seenPermIds.has(`res:${data.id}`)) return;
+          seenPermIds.add(`res:${data.id}`);
+          handlers.onPermResolved?.({
+            id: data.id,
+            outcome: data.outcome ?? "",
+            source: data.source ?? "",
+          });
+          return;
+        }
         if (data._channel === "perm") {
           const permId = data.id;
           if (!permId) return;
