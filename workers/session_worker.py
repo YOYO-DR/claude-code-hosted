@@ -588,15 +588,15 @@ class Worker:
         # SP12: contexto por modelo para la barra + marcador de auto-compact.
         self._max_context_tokens = profile.max_context_tokens
         self._auto_compact_threshold = profile.auto_compact_threshold
-        # SP12 (4b): aplicar al CLI REAL, no solo al display. El Claude Code CLI
-        # lee estos env (verificado en el binario empaquetado):
-        #   CLAUDE_CODE_MAX_CONTEXT_TOKENS  → tope de contexto en tokens
-        #   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE → umbral % de auto-compact
-        # setdefault: extra_env del modelo sigue pudiendo pisarlos (escotilla).
+        # SP12 (4b): `max_context_tokens` SÍ controla el CLI real vía
+        # CLAUDE_CODE_MAX_CONTEXT_TOKENS (verificado en vivo: el SDK reporta el
+        # nuevo maxTokens). setdefault: extra_env del modelo puede pisarlo.
+        # El umbral de auto-compact NO es un % configurable: el CLI usa
+        # threshold = maxTokens - 33000 (buffer fijo) y CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+        # es un knob de test que no aplica en operación normal. Por eso
+        # `auto_compact_threshold` es solo un marcador visual (advisory).
         if profile.max_context_tokens:
             env.setdefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", str(int(profile.max_context_tokens)))
-        if profile.auto_compact_threshold:
-            env.setdefault("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", str(int(profile.auto_compact_threshold)))
         approve = policy.mode == "approve"
         mode: PermissionMode = "default" if approve else "bypassPermissions"
         # MCP de puertos in-process (§4.5): tokens/DB nunca a disco. Las tools
