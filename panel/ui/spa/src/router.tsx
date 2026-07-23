@@ -15,6 +15,7 @@ import { McpsPage } from "@/pages/Mcps";
 import { GithubPage } from "@/pages/Github";
 import { PermissionsPage } from "@/pages/Permissions";
 import { ModelsPage } from "@/pages/Models";
+import { DockerPage } from "@/pages/Docker";
 import type { CurrentUser } from "@/lib/me";
 
 export interface RouterContext {
@@ -63,6 +64,7 @@ function RootLayout() {
             <a href="/mcps">MCPs</a>
             <a href="/github">GitHub</a>
             <a href="/models">Modelos</a>
+            <a href="/docker">Docker</a>
             <a href="/permissions">Aprobaciones</a>
           </nav>
         )}
@@ -152,6 +154,12 @@ const permissionsRoute = createRoute({
   component: PermissionsPage,
 });
 
+const dockerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/docker",
+  component: DockerPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   sessionsRoute,
@@ -161,6 +169,7 @@ const routeTree = rootRoute.addChildren([
   githubRoute,
   modelsRoute,
   permissionsRoute,
+  dockerRoute,
 ]);
 
 export const router = createRouter({

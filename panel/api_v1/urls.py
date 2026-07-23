@@ -2,7 +2,7 @@
 
 from django.urls import path
 
-from . import auth, github, mcps, models, permissions, projects, sessions
+from . import auth, docker, github, mcps, models, permissions, projects, sessions
 
 urlpatterns = [
     # Auth
@@ -46,6 +46,9 @@ urlpatterns = [
     path("models/<int:pk>/update/", models.update_model, name="api_v1_model_update"),
     path("models/<int:pk>/delete/", models.delete_model, name="api_v1_model_delete"),
     path("models/<int:pk>/test/", models.test_model, name="api_v1_model_test"),
+    # Docker (SP15) — vista de contenedores; solo stop, nunca down/-v
+    path("docker/", docker.list_containers, name="api_v1_docker"),
+    path("docker/stop/", docker.stop, name="api_v1_docker_stop"),
     # Permissions
     path("permissions/", permissions.list_permissions, name="api_v1_permissions"),
     path(

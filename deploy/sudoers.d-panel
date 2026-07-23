@@ -14,3 +14,9 @@ panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-purge.sh /srv/projects/*
 # SP8: chown a agents:agents de archivos materializados por el render. El
 # script valida que el path esté bajo /srv/projects/.
 panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-chown-agents.sh /srv/projects/*
+
+# SP15: vista de contenedores Docker. Solo `list` y `stop <id>` — el script NO
+# expone rm/down/-v, y rechaza parar contenedores de la infra del panel
+# (panel-infra), que además se ocultan de la vista.
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-docker.sh list
+panel ALL=(root) NOPASSWD: /opt/panel/deploy/panel-docker.sh stop [a-zA-Z0-9]*
