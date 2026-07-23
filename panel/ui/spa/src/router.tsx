@@ -2,7 +2,7 @@
 // Las definimos con createRoute() en lugar de createFileRoute() para
 // evitar depender del plugin de generación de tipos.
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useState } from "react";
 import {
   createRouter, createRoute, createRootRoute, Outlet,
 } from "@tanstack/react-router";
@@ -17,6 +17,7 @@ import { PermissionsPage } from "@/pages/Permissions";
 import { ModelsPage } from "@/pages/Models";
 import { DockerPage } from "@/pages/Docker";
 import type { CurrentUser } from "@/lib/me";
+import { getTheme, setTheme, type ThemeMode } from "@/lib/theme";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -49,6 +50,14 @@ function RootLayout() {
   // (login, logout, settings) llama a refresh() explícitamente.
   const { me } = useAuth();
   const authed = !!me?.is_verified;
+  const [theme, setThemeState] = useState<ThemeMode>(getTheme());
+  const cycleTheme = () => {
+    const next: ThemeMode = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
+    setTheme(next);
+    setThemeState(next);
+  };
+  const themeLabel =
+    theme === "dark" ? "🌙 Oscuro" : theme === "light" ? "☀️ Claro" : "🖥️ Sistema";
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <header className="app-header">
@@ -68,23 +77,34 @@ function RootLayout() {
             <a href="/permissions">Aprobaciones</a>
           </nav>
         )}
-        {authed && me && (
-          <span className="right">
-            <span>{me.username}</span>
-            <form
-              method="post"
-              action="/api/v1/logout/"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void fetch("/api/v1/logout/", {
-                  method: "POST", credentials: "include",
-                }).then(() => { window.location.href = "/"; });
-              }}
-            >
-              <button type="submit">Salir</button>
-            </form>
-          </span>
-        )}
+        <span className="right">
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={cycleTheme}
+            title="Cambiar tema (oscuro / claro / sistema)"
+            aria-label={`Tema: ${themeLabel}`}
+          >
+            {themeLabel}
+          </button>
+          {authed && me && (
+            <>
+              <span>{me.username}</span>
+              <form
+                method="post"
+                action="/api/v1/logout/"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void fetch("/api/v1/logout/", {
+                    method: "POST", credentials: "include",
+                  }).then(() => { window.location.href = "/"; });
+                }}
+              >
+                <button type="submit">Salir</button>
+              </form>
+            </>
+          )}
+        </span>
       </header>
       <main>
         <Outlet />

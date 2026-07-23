@@ -6,7 +6,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { router, AuthContext } from "@/router";
 import { fetchMe, type CurrentUser } from "@/lib/me";
+import { bootstrapTheme } from "@/lib/theme";
 import "@/styles.css";
+
+// SP16: aplicar el tema guardado ANTES de montar React. Si no, hay flash
+// de light (vars claras) durante el primer render aunque el usuario tenga
+// dark guardado.
+bootstrapTheme();
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<CurrentUser | null>(null);

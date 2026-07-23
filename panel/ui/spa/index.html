@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Claude Code · Panel</title>
+    <script>
+      // SP16: aplicar el tema guardado ANTES del primer paint para evitar
+      // flash. Inlincado a propósito (no se externaliza).
+      (function () {
+        try {
+          var k = "panel-theme";
+          var v = localStorage.getItem(k);
+          if (v === "light" || v === "dark") {
+            document.documentElement.setAttribute("data-theme", v);
+          } else {
+            // default: dark — sin atributo, el @media del CSS ya pone las
+            // vars dark si el SO está en light, pero queremos dark por
+            // default, así que lo forzamos.
+            document.documentElement.setAttribute("data-theme", "dark");
+          }
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

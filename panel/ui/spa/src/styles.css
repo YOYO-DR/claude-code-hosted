@@ -4,6 +4,27 @@
 
 :root {
   color-scheme: light dark;
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --border: #30363d;
+  --accent: #58a6ff;
+  --warn-bg: #3d2c00;
+  --warn-fg: #e3b341;
+  --err-bg: #3c1518;
+  --err-fg: #ff7b72;
+  --ok-bg: #0f2d1b;
+  --ok-fg: #56d364;
+  --card-bg: #161b22;
+  --bubble-user-bg: #1c2128;
+  --bubble-user-fg: #e6edf3;
+  --bubble-info-bg: #102a4a;
+  --bubble-info-fg: #79b8ff;
+}
+/* SP16: data-theme="light" pisa el dark default. data-theme="system" deja que
+   el @media actúe según prefers-color-scheme. */
+:root[data-theme="light"] {
+  color-scheme: light;
   --bg: #f7f7f8;
   --fg: #1f2328;
   --muted: #6e7681;
@@ -16,22 +37,31 @@
   --ok-bg: #dafbe1;
   --ok-fg: #116329;
   --card-bg: #ffffff;
+  --bubble-user-bg: #f6f8fa;
+  --bubble-user-fg: #1f2328;
+  --bubble-info-bg: #ddf4ff;
+  --bubble-info-fg: #0550ae;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --border: #30363d;
-    --accent: #58a6ff;
-    --warn-bg: #3d2c00;
-    --warn-fg: #e3b341;
-    --err-bg: #3c1518;
-    --err-fg: #ff7b72;
-    --ok-bg: #0f2d1b;
-    --ok-fg: #56d364;
-    --card-bg: #161b22;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    color-scheme: light;
+    --bg: #f7f7f8;
+    --fg: #1f2328;
+    --muted: #6e7681;
+    --border: #d0d7de;
+    --accent: #0969da;
+    --warn-bg: #fff8c5;
+    --warn-fg: #4a3700;
+    --err-bg: #ffebe9;
+    --err-fg: #82071e;
+    --ok-bg: #dafbe1;
+    --ok-fg: #116329;
+    --card-bg: #ffffff;
+    --bubble-user-bg: #f6f8fa;
+    --bubble-user-fg: #1f2328;
+    --bubble-info-bg: #ddf4ff;
+    --bubble-info-fg: #0550ae;
   }
 }
 
@@ -83,6 +113,17 @@ header.app-header .right {
   font-size: 0.9em;
 }
 header.app-header .right form { display: inline; }
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+.theme-toggle:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* ---------- Main ---------- */
 
@@ -382,9 +423,9 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
   align-items: center;
   gap: 0.6rem;
   padding: 0.55rem 0.8rem;
-  background: #ddf4ff;
-  color: #0550ae;
-  border-left: 3px solid #54aeff;
+  background: var(--bubble-info-bg);
+  color: var(--bubble-info-fg);
+  border-left: 3px solid var(--accent);
   font-size: 0.9em;
 }
 .boot-banner .boot-spinner {
@@ -402,8 +443,9 @@ form.login h1 { margin: 0 0 0.5rem; text-align: center; }
 }
 .bubble.error { border-left-color: var(--err-fg); background: var(--err-bg); color: var(--err-fg); }
 .bubble.user {
-  border-left-color: #0969da;
-  background: #f6f8fa;
+  border-left-color: var(--accent);
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
   margin-left: auto;
   max-width: 80%;
   text-align: left;
@@ -645,50 +687,24 @@ li.diff-item { padding: 0; overflow: hidden; }
   border-radius: 6px;
   font: inherit;
   color: inherit;
-  text-align: left;
-  cursor: pointer;
 }
-.diff-row:hover:not(:disabled) { background: var(--bg); border-color: var(--accent); }
-.diff-row:disabled { cursor: default; opacity: 0.7; }
+.diff-row[aria-disabled="true"] { opacity: 0.7; }
 .diff-row .diff-chevron { color: var(--muted); font-size: 0.85em; width: 1em; }
 .diff-row .diff-filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .diff-row .diff-filename code { font-family: ui-monospace, monospace; font-size: 0.85em; }
 .diff-row .diff-counts { font-family: ui-monospace, monospace; font-size: 0.85em; white-space: nowrap; }
-.diff-body {
-  margin: 0.2rem 0 0.4rem 1.2rem;
-  padding: 0.5rem;
-  border-left: 3px solid var(--accent);
-  font-size: 0.85em;
-  max-height: 380px;
-  overflow: auto;
+.diff-view-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.78em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  cursor: pointer;
 }
-.diff-hunk {
-  background: #ddf4ff;
-  color: #0550ae;
-  padding: 0.1rem 0.4rem;
-  font-family: ui-monospace, monospace;
-  font-size: 0.95em;
-  margin: 0.2rem 0;
-  border-radius: 3px;
-}
-.diff-line {
-  display: flex;
-  font-family: ui-monospace, monospace;
-  font-size: 0.85em;
-  line-height: 1.5;
-  white-space: pre;
-}
-.diff-line.add { background: #e6ffec; color: #1a7f37; }
-.diff-line.del { background: #ffebe9; color: #cf222e; }
-.diff-gutter {
-  display: inline-block;
-  width: 1.2em;
-  text-align: center;
-  color: var(--muted);
-  user-select: none;
-  flex-shrink: 0;
-}
-.diff-text { flex: 1; }
+.diff-view-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* ============================================================
    ImageModal — visor full-screen con zoom + pan

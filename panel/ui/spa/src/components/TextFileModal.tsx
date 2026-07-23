@@ -1,14 +1,8 @@
 // Visor de archivos de texto full-screen. Abre cuando el explorador detecta
 // un archivo NO binario y el usuario hace click. Se complementa con el visor
 // de imágenes: ambos comparten la estética (overlay oscuro, header, footer).
-//
-// Funcionalidad:
-//   - Contenido en <pre> monoespaciado, scrollable, wrap configurable.
-//   - Botón Copiar (clipboard API) — copia todo el contenido visible.
-//   - Botón Descargar — apunta a /raw/ (con Content-Type correcto) y usa el
-//     atributo `download` para forzar la descarga.
-//   - Indicador "(truncado)" si /file/ devolvió solo una porción (cap 100 KB).
-//   - Cerrar con ESC, click fuera del contenido, o ×.
+// SP16: el botón "Ver diff" del tab Cambios también usa este modal para ver
+// el diff completo con copiar/descargar.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -18,7 +12,9 @@ export interface TextFileModalProps {
   filename: string;
   sizeBytes?: number;
   truncated?: boolean;
-  downloadUrl: string;
+  /** URL para el botón Descargar. Si no se pasa, se genera en memoria desde
+   *  `content` (blob URL). */
+  downloadUrl?: string;
   onClose: () => void;
 }
 
@@ -35,6 +31,20 @@ export function TextFileModal({
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(true);
   const copyTimer = useRef<number | null>(null);
+
+  // SP16: si el caller no pasó downloadUrl, generamos una Blob URL en memoria
+  // a partir del contenido. La revocamos al cambiar el contenido o al
+  // desmontar. Es el camino que usa el diff viewer (no hay endpoint raw para
+  // diffs; el texto ya viene en `q.data.diff`).
+  const [blobUrl, setBlobUrl] = useState<string>("");
+  useEffect(() => {
+    if (downloadUrl || !open || typeof Blob === "undefined") return;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const u = URL.createObjectURL(blob);
+    setBlobUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [content, downloadUrl, open]);
+  const resolvedDownloadUrl = downloadUrl || blobUrl;
 
   // Reset al cambiar de archivo / abrir / cerrar.
   useEffect(() => {
@@ -142,7 +152,7 @@ export function TextFileModal({
         <button onClick={() => setWrap((w) => !w)} title="Alternar wrap de líneas">
           {wrap ? "↩ Wrap" : "→ No wrap"}
         </button>
-        <a className="img-modal-download" href={downloadUrl} download={filename} title="Descargar">
+        <a className="img-modal-download" href={resolvedDownloadUrl} download={filename} title="Descargar">
           ⬇ Descargar
         </a>
       </footer>

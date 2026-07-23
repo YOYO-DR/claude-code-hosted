@@ -216,19 +216,9 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={cls}>{label}</span>;
 }
 
-function DiffLine({ line }: { line: string }) {
-  // Las primeras 2 columnas de un diff son "indicador + nº de línea" (ej "+
-  // 1"), las saltamos para alinear visualmente con el resto del código.
-  const isAdd = line.startsWith("+") && !line.startsWith("+++");
-  const isDel = line.startsWith("-") && !line.startsWith("---");
-  const text = line.length > 0 ? line.slice(1) : line;
-  return (
-    <div className={isAdd ? "diff-line add" : isDel ? "diff-line del" : "diff-line"}>
-      <span className="diff-gutter">{isAdd ? "+" : isDel ? "-" : " "}</span>
-      <span className="diff-text">{text || " "}</span>
-    </div>
-  );
-}
+// DiffLine retirado en SP16: el diff se ve ahora en TextFileModal (mejor
+// con zoom/pan/copy/descarga). Si vuelves a necesitar colorear +/- por línea,
+// busca en git history (commit pre-SP16).
 
 export function ProjectDiff({ slug }: { slug: string }) {
   const filesQ = useQuery({
@@ -237,7 +227,10 @@ export function ProjectDiff({ slug }: { slug: string }) {
     enabled: !!slug,
     refetchInterval: 5000,
   });
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // SP16: cada archivo se ve en modal (igual que el file viewer). `path` =
+  // archivo cuyo diff está abierto; `body` = contenido ya cargado (mientras
+  // carga, el modal muestra "Cargando…").
+  const [diffModal, setDiffModal] = useState<string | null>(null);
 
   if (filesQ.isLoading) return <p className="meta">Cargando diff…</p>;
   if (filesQ.error) return <p className="msg error">Error: {String(filesQ.error)}</p>;
@@ -251,15 +244,6 @@ export function ProjectDiff({ slug }: { slug: string }) {
   const totalDels = files.reduce((s, f) => s + (f.deletions || 0), 0);
   const dirty = files.length > 0;
 
-  const toggle = (path: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-
   return (
     <div>
       <div className="diff-header">
@@ -270,8 +254,8 @@ export function ProjectDiff({ slug }: { slug: string }) {
         </span>
         {dirty && (
           <span style={{ marginLeft: "auto", display: "flex", gap: "0.4rem", fontFamily: "ui-monospace, monospace" }}>
-            <span style={{ color: "#1a7f37", fontWeight: 600 }}>+{totalAdds}</span>
-            <span style={{ color: "#cf222e", fontWeight: 600 }}>−{totalDels}</span>
+            <span style={{ color: "var(--ok-fg)", fontWeight: 600 }}>+{totalAdds}</span>
+            <span style={{ color: "var(--err-fg)", fontWeight: 600 }}>−{totalDels}</span>
           </span>
         )}
       </div>
@@ -279,15 +263,9 @@ export function ProjectDiff({ slug }: { slug: string }) {
       <ul className="diff-tree">
         {files.map((f) => (
           <li key={f.path} className="diff-item">
-            <button
-              type="button"
-              className="diff-row"
-              onClick={() => !f.is_binary && toggle(f.path)}
-              aria-expanded={expanded.has(f.path)}
-              disabled={f.is_binary}
-            >
+            <div className="diff-row" aria-disabled={f.is_binary}>
               <span className="diff-chevron" aria-hidden>
-                {f.is_binary ? "" : expanded.has(f.path) ? "▾" : "▸"}
+                {f.is_binary ? "" : "▸"}
               </span>
               <span className="diff-filename">
                 <StatusBadge status={f.status} />{" "}
@@ -295,49 +273,95 @@ export function ProjectDiff({ slug }: { slug: string }) {
               </span>
               {!f.is_binary && (
                 <span className="diff-counts">
-                  <span style={{ color: "#1a7f37" }}>+{f.additions}</span>
-                  <span style={{ color: "#cf222e", marginLeft: "0.4rem" }}>−{f.deletions}</span>
+                  <span style={{ color: "var(--ok-fg)" }}>+{f.additions}</span>
+                  <span style={{ color: "var(--err-fg)", marginLeft: "0.4rem" }}>−{f.deletions}</span>
                 </span>
               )}
-              {f.is_binary && (
+              {f.is_binary ? (
                 <span className="diff-counts meta">binario</span>
+              ) : (
+                <button
+                  type="button"
+                  className="diff-view-btn"
+                  onClick={() => setDiffModal(f.path)}
+                >
+                  Ver diff
+                </button>
               )}
-            </button>
-            {expanded.has(f.path) && !f.is_binary && (
-              <DiffBody slug={slug} path={f.path} />
-            )}
+            </div>
           </li>
         ))}
       </ul>
+      {diffModal && (
+        <DiffViewerModal
+          slug={slug}
+          path={diffModal}
+          onClose={() => setDiffModal(null)}
+        />
+      )}
     </div>
   );
 }
 
-function DiffBody({ slug, path }: { slug: string; path: string }) {
+function DiffViewerModal({
+  slug, path, onClose,
+}: { slug: string; path: string; onClose: () => void }) {
   const q = useQuery({
     queryKey: ["diff-file", slug, path],
     queryFn: () => api<DiffFileContent>(
       `/api/v1/projects/${slug}/diff/file/?path=${encodeURIComponent(path)}`,
     ),
   });
-  if (q.isLoading) return <p className="meta" style={{ padding: "0.4rem 1.5rem" }}>Cargando diff…</p>;
-  if (q.error || !q.data || q.data.error) {
-    return <p className="msg error" style={{ padding: "0.4rem 1.5rem" }}>Error: {String(q.error ?? q.data?.error)}</p>;
+
+  const diff = q.data?.diff ?? "";
+  const isError = !!q.error || (q.data && "error" in q.data && q.data.error);
+  const filename = `${path}.diff`;
+  // Blob URL para que Descargar funcione sin endpoint raw. Si reusar el
+  // mismo path abre el modal varias veces, se re-genera con el contenido
+  // actual. URL.revokeObjectURL lo hace el TextFileModal al cerrarse.
+  const downloadUrl = useBlobUrl(diff, "text/plain;charset=utf-8");
+
+  if (q.isLoading) {
+    return (
+      <TextFileModal
+        open
+        content="(cargando…)"
+        filename={filename}
+        onClose={onClose}
+      />
+    );
   }
-  const lines = (q.data.diff || "").split("\n");
-  // Filtramos los headers de archivo "diff --git" / "index" / "---" / "+++" si
-  // están al inicio (visual redundante con la fila clickeable). Conservamos las
-  // líneas "@@ …" como separadores hunks.
+  if (isError) {
+    return (
+      <TextFileModal
+        open
+        content={`Error al obtener el diff: ${String(q.error ?? q.data?.error ?? "desconocido")}`}
+        filename={filename}
+        onClose={onClose}
+      />
+    );
+  }
   return (
-    <pre className="diff-body unboxed">
-      {lines.map((ln, i) => {
-        if (ln.startsWith("diff --git") || ln.startsWith("index ")) return null;
-        if (ln === "---" || ln === "+++") return null;
-        if (ln.startsWith("@@")) {
-          return <div key={i} className="diff-hunk">{ln}</div>;
-        }
-        return <DiffLine key={i} line={ln} />;
-      })}
-    </pre>
+    <TextFileModal
+      open
+      content={diff}
+      filename={filename}
+      downloadUrl={downloadUrl}
+      onClose={onClose}
+    />
   );
+}
+
+// Hook local: crea/revoca una Blob URL para un texto. La renueva si el
+// contenido o el tipo cambia. El TextFileModal la usa para "Descargar".
+function useBlobUrl(text: string, mime: string): string {
+  const [url, setUrl] = useState<string>("");
+  useEffect(() => {
+    if (typeof URL === "undefined" || typeof Blob === "undefined") return;
+    const blob = new Blob([text], { type: mime });
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [text, mime]);
+  return url;
 }
