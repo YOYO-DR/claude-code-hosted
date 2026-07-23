@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { ImageModal } from "./ImageModal";
 import { TextFileModal } from "./TextFileModal";
+import { DiffModal } from "./DiffModal";
 
 // Allowlist de extensiones que se renderizan como imagen. Coincide con
 // RAW_IMAGE_EXTS del backend; si se desincroniza, el backend responderá 403
@@ -306,6 +307,12 @@ export function ProjectDiff({ slug }: { slug: string }) {
 function DiffViewerModal({
   slug, path, onClose,
 }: { slug: string; path: string; onClose: () => void }) {
+  // Necesitamos el diff Y la lista de archivos (que tiene +N -M) para
+  // mostrar el conteo en el header del modal.
+  const fileQ = useQuery({
+    queryKey: ["diff-files", slug],
+    queryFn: () => api<DiffFiles>(`/api/v1/projects/${slug}/diff/files/`),
+  });
   const q = useQuery({
     queryKey: ["diff-file", slug, path],
     queryFn: () => api<DiffFileContent>(
@@ -315,53 +322,42 @@ function DiffViewerModal({
 
   const diff = q.data?.diff ?? "";
   const isError = !!q.error || (q.data && "error" in q.data && q.data.error);
-  const filename = `${path}.diff`;
-  // Blob URL para que Descargar funcione sin endpoint raw. Si reusar el
-  // mismo path abre el modal varias veces, se re-genera con el contenido
-  // actual. URL.revokeObjectURL lo hace el TextFileModal al cerrarse.
-  const downloadUrl = useBlobUrl(diff, "text/plain;charset=utf-8");
+  const filename = path;
+  const meta = fileQ.data?.files?.find((f) => f.path === path);
+  const additions = meta?.additions ?? 0;
+  const deletions = meta?.deletions ?? 0;
 
   if (q.isLoading) {
     return (
-      <TextFileModal
-        open
-        content="(cargando…)"
-        filename={filename}
-        onClose={onClose}
-      />
+      <div className="img-modal-overlay" role="dialog" aria-modal="true">
+        <header className="img-modal-header">
+          <span className="img-modal-title">📝 {filename}</span>
+        </header>
+        <div className="diff-modal-stage">
+          <pre className="diff-modal-pre df-empty">(cargando…)</pre>
+        </div>
+      </div>
     );
   }
   if (isError) {
     return (
-      <TextFileModal
-        open
-        content={`Error al obtener el diff: ${String(q.error ?? q.data?.error ?? "desconocido")}`}
-        filename={filename}
-        onClose={onClose}
-      />
+      <div className="img-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
+        <div className="diff-modal-stage" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+          <pre className="diff-modal-pre df-empty">
+            Error al obtener el diff: {String(q.error ?? q.data?.error ?? "desconocido")}
+          </pre>
+        </div>
+      </div>
     );
   }
   return (
-    <TextFileModal
+    <DiffModal
       open
-      content={diff}
+      diff={diff}
       filename={filename}
-      downloadUrl={downloadUrl}
+      additions={additions}
+      deletions={deletions}
       onClose={onClose}
     />
   );
-}
-
-// Hook local: crea/revoca una Blob URL para un texto. La renueva si el
-// contenido o el tipo cambia. El TextFileModal la usa para "Descargar".
-function useBlobUrl(text: string, mime: string): string {
-  const [url, setUrl] = useState<string>("");
-  useEffect(() => {
-    if (typeof URL === "undefined" || typeof Blob === "undefined") return;
-    const blob = new Blob([text], { type: mime });
-    const u = URL.createObjectURL(blob);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [text, mime]);
-  return url;
 }

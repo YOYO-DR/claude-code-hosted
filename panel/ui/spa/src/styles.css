@@ -1050,6 +1050,66 @@ li.diff-item { padding: 0; overflow: hidden; }
   word-break: break-word;
 }
 
+/* DiffModal — stage y líneas coloreadas por signo (+/-/espacio).
+   Reutiliza .img-modal-* (overlay, header, footer). */
+.diff-modal-stage {
+  position: relative;
+  overflow: auto;
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: stretch;
+}
+.diff-modal-pre {
+  flex: 1;
+  margin: 0;
+  padding: 0.6rem 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.55;
+  /* Sin wrap: alinear + / - / espacio a un gutter fijo exige líneas rectas.
+     El usuario puede hacer scroll horizontal si una línea es muy larga. */
+  white-space: pre;
+  tab-size: 4;
+  min-width: 100%;
+}
+.df-row {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  align-items: baseline;
+  padding: 0 0.6rem;
+}
+.df-sign {
+  text-align: center;
+  font-weight: 600;
+  user-select: none;
+  color: var(--muted);
+}
+.df-add {
+  background: color-mix(in srgb, var(--ok-fg) 12%, transparent);
+}
+.df-add .df-sign { color: var(--ok-fg); }
+.df-del {
+  background: color-mix(in srgb, var(--err-fg) 12%, transparent);
+}
+.df-del .df-sign { color: var(--err-fg); }
+.df-hunk {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.df-meta {
+  color: var(--muted);
+  font-style: italic;
+  padding-top: 0.3rem;
+  padding-bottom: 0.1rem;
+}
+.df-empty { color: var(--muted); }
+
 /* El botón "Copiar" en estado ok usa el verde del tema; el "Descargar" ya
    hereda de .img-modal-download. El "↩/→ Wrap" es más ancho que los otros
    por la etiqueta, así que le damos min-width. */
