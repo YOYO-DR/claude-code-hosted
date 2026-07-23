@@ -20,6 +20,12 @@ def key_answer(uuid: str) -> str:
     return f"perm:{uuid}:answer"
 
 
+def key_perm_selections(uuid: str) -> str:
+    """SP14: selecciones parciales de un AskUserQuestion en Telegram, mientras
+    el usuario va marcando opciones y aún no ha enviado. JSON, TTL = ANSWER_TTL."""
+    return f"perm:{uuid}:sel"
+
+
 def key_perm_resolved() -> str:
     # Canal global: el worker publica {request_id, outcome} al resolver un
     # permiso; el tg_bridge edita el mensaje de Telegram correspondiente.

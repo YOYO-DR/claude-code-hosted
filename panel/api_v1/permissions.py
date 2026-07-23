@@ -51,6 +51,30 @@ def resolve_permission(request: HttpRequest, perm_id: str) -> JsonResponse:
     if option_index is not None:
         if not isinstance(option_index, int) or option_index < 0:
             return JsonResponse({"error": "option_index debe ser int >= 0"}, status=400)
+    # SP14: AskUserQuestion multi-pregunta / multiSelect. El cliente manda
+    # SOLO índices; los labels los resuelve el worker contra el input_full
+    # guardado en la BD (el cliente nunca inyecta el texto de la respuesta).
+    selections = body.get("selections")
+    if selections is not None:
+        if not isinstance(selections, dict):
+            return JsonResponse({"error": "selections debe ser objeto"}, status=400)
+        clean: dict[str, list[int]] = {}
+        for k, v in selections.items():
+            try:
+                qi = int(k)
+            except (TypeError, ValueError):
+                return JsonResponse({"error": f"clave de pregunta inválida: {k!r}"}, status=400)
+            if qi < 0:
+                return JsonResponse({"error": "índice de pregunta negativo"}, status=400)
+            idxs = [v] if isinstance(v, int) else v
+            if not isinstance(idxs, list) or not all(
+                isinstance(i, int) and i >= 0 for i in idxs
+            ):
+                return JsonResponse(
+                    {"error": f"selecciones inválidas para la pregunta {qi}"}, status=400
+                )
+            clean[str(qi)] = idxs
+        selections = clean
     try:
         claimed, req = perm_svc.resolve_atomically(perm_id, answer, source="web")
     except ValueError as exc:
@@ -62,7 +86,10 @@ def resolve_permission(request: HttpRequest, perm_id: str) -> JsonResponse:
 
     client = redis.from_url(settings.REDIS_URL)
     try:
-        perm_svc.claim_answer_sync(client, perm_id, answer, source="web", option_index=option_index)
+        perm_svc.claim_answer_sync(
+            client, perm_id, answer, source="web",
+            option_index=option_index, selections=selections,
+        )
     finally:
         client.close()
     return JsonResponse({"ok": True, "status": req.status if req else None})

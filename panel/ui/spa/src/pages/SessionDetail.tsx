@@ -403,17 +403,18 @@ export function SessionPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["session", sid] }),
   });
   const resolvePerm = useMutation({
-    mutationFn: ({ id, answer, option_index }: {
+    mutationFn: ({ id, answer, option_index, selections }: {
       id: string;
       answer: "allow" | "allow_always" | "deny";
       option_index?: number;
-    }) =>
-      api(`/api/v1/permissions/${id}/resolve/`, {
-        method: "POST",
-        body: option_index !== undefined
-          ? { answer, option_index }
-          : { answer },
-      }),
+      // SP14: {qIdx: [optIdx…]} para AskUserQuestion multi-pregunta/multiSelect.
+      selections?: Record<string, number[]>;
+    }) => {
+      const body: Record<string, unknown> = { answer };
+      if (selections !== undefined) body.selections = selections;
+      else if (option_index !== undefined) body.option_index = option_index;
+      return api(`/api/v1/permissions/${id}/resolve/`, { method: "POST", body });
+    },
   });
 
   if (!sid) return <p className="msg error">URL inválida — falta session id.</p>;
@@ -537,8 +538,8 @@ export function SessionPage() {
                 key={b.key}
                 bubble={b}
                 showDetails={showDetails}
-                onResolvePerm={(id, answer, option_index) =>
-                resolvePerm.mutate({ id, answer, option_index })
+                onResolvePerm={(id, answer, option_index, selections) =>
+                resolvePerm.mutate({ id, answer, option_index, selections })
               }
                 resolving={resolvePerm.isPending}
               />
@@ -679,6 +680,196 @@ export function SessionPage() {
   );
 }
 
+// ---------- SP14: AskUserQuestion ----------
+// Schema real del CLI (sdk-tools.d.ts, AskUserQuestionInput):
+//   {questions: [{question, header, options: [{label, description, preview?}],
+//                 multiSelect}]}
+// La respuesta vuelve como `answers: {textoPregunta: label}` — el backend la
+// construye a partir de los índices que mandamos en `selections`.
+
+interface QOption {
+  label: string;
+  description: string;
+  preview: string | null;
+}
+interface Question {
+  question: string;
+  header: string;
+  options: QOption[];
+  multiSelect: boolean;
+}
+
+/** Espejo de `panel/core/services/questions.py::parse_questions`. Tolerante:
+ *  lo que no encaja se descarta en vez de romper el render. */
+function parseQuestions(inputFull: unknown): Question[] {
+  if (!inputFull || typeof inputFull !== "object") return [];
+  const raw = (inputFull as { questions?: unknown }).questions;
+  if (!Array.isArray(raw)) return [];
+  const out: Question[] = [];
+  for (const q of raw) {
+    if (!q || typeof q !== "object") continue;
+    const qq = q as Record<string, unknown>;
+    const text = String(qq.question ?? "").trim();
+    if (!text) continue;
+    const options: QOption[] = [];
+    for (const o of Array.isArray(qq.options) ? qq.options : []) {
+      if (o && typeof o === "object") {
+        const oo = o as Record<string, unknown>;
+        const label = String(oo.label ?? "").trim();
+        if (!label) continue;
+        options.push({
+          label,
+          description: String(oo.description ?? ""),
+          preview: oo.preview ? String(oo.preview) : null,
+        });
+      } else if (typeof o === "string" && o.trim()) {
+        options.push({ label: o.trim(), description: "", preview: null });
+      }
+    }
+    if (!options.length) continue;
+    out.push({
+      question: text,
+      header: String(qq.header ?? "").slice(0, 32),
+      options,
+      multiSelect: Boolean(qq.multiSelect),
+    });
+  }
+  return out;
+}
+
+function QuestionCard({
+  id,
+  questions,
+  outcomeTag,
+  resolving,
+  onResolvePerm,
+}: {
+  id: string;
+  questions: Question[];
+  outcomeTag: string | null;
+  resolving: boolean;
+  onResolvePerm: (
+    id: string,
+    answer: "allow" | "allow_always" | "deny",
+    option_index?: number,
+    selections?: Record<string, number[]>,
+  ) => void;
+}) {
+  // {qIdx: [optIdx…]}. Para single-select la lista tiene 0 o 1 elemento.
+  const [sel, setSel] = useState<Record<string, number[]>>({});
+  const [preview, setPreview] = useState<{ q: number; o: number } | null>(null);
+
+  const toggle = (qi: number, oi: number, multi: boolean) => {
+    setSel((prev) => {
+      const key = String(qi);
+      const cur = prev[key] ?? [];
+      if (!multi) return { ...prev, [key]: cur[0] === oi ? [] : [oi] };
+      return {
+        ...prev,
+        [key]: cur.includes(oi) ? cur.filter((x) => x !== oi) : [...cur, oi],
+      };
+    });
+  };
+
+  const complete = questions.every((_, qi) => (sel[String(qi)] ?? []).length > 0);
+  // Atajo: 1 pregunta single-select → al elegir se envía sin pasar por "Enviar".
+  const autoSend = questions.length === 1 && !questions[0].multiSelect;
+  const submit = (s: Record<string, number[]>) => onResolvePerm(id, "allow", undefined, s);
+
+  const activePreview =
+    preview && questions[preview.q]?.options[preview.o]?.preview
+      ? questions[preview.q].options[preview.o].preview
+      : null;
+
+  return (
+    <div className="bubble question-card">
+      <div className="question-card-head">
+        <span className="question-card-icon" aria-hidden>❓</span>
+        <strong>El agente pregunta</strong>
+        {questions.length > 1 && (
+          <span className="meta">· {questions.length} preguntas</span>
+        )}
+      </div>
+
+      {questions.map((q, qi) => {
+        const chosen = sel[String(qi)] ?? [];
+        return (
+          <div key={qi} className="question-block">
+            <div className="question-title-row">
+              {q.header && <span className="question-chip">{q.header}</span>}
+              <span className="question-text">{q.question}</span>
+              {q.multiSelect && (
+                <span className="question-multi-hint">(varias)</span>
+              )}
+            </div>
+            <div className="question-options">
+              {q.options.map((o, oi) => {
+                const active = chosen.includes(oi);
+                return (
+                  <button
+                    key={oi}
+                    type="button"
+                    className={`question-option${active ? " selected" : ""}`}
+                    disabled={resolving || !!outcomeTag}
+                    aria-pressed={active}
+                    onMouseEnter={() => o.preview && setPreview({ q: qi, o: oi })}
+                    onMouseLeave={() => setPreview(null)}
+                    onClick={() => {
+                      if (autoSend) {
+                        submit({ "0": [oi] });
+                        return;
+                      }
+                      toggle(qi, oi, q.multiSelect);
+                    }}
+                  >
+                    <span className="question-marker" aria-hidden>
+                      {q.multiSelect ? (active ? "☑" : "☐") : active ? "◉" : "○"}
+                    </span>
+                    <span className="question-option-body">
+                      <span className="question-option-label">{o.label}</span>
+                      {o.description && (
+                        <span className="question-option-desc">{o.description}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {activePreview && (
+        <pre className="question-preview">{activePreview}</pre>
+      )}
+
+      {outcomeTag ? (
+        <div className="tag ok" style={{ marginTop: "0.4rem" }}>{outcomeTag}</div>
+      ) : (
+        <div className="question-actions">
+          {!autoSend && (
+            <button
+              className="primary"
+              disabled={resolving || !complete}
+              onClick={() => submit(sel)}
+              title={complete ? "Enviar respuestas" : "Responde todas las preguntas"}
+            >
+              Enviar
+            </button>
+          )}
+          <button
+            className="danger"
+            disabled={resolving}
+            onClick={() => onResolvePerm(id, "deny")}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BubbleView({
   bubble,
   showDetails,
@@ -691,6 +882,7 @@ function BubbleView({
     id: string,
     answer: "allow" | "allow_always" | "deny",
     option_index?: number,
+    selections?: Record<string, number[]>,
   ) => void;
   resolving: boolean;
 }) {
@@ -753,19 +945,23 @@ function BubbleView({
             : r?.outcome === "timeout"
               ? "⏱ Expirado sin respuesta"
               : null;
-      // SP9.1: las preguntas del agente (AskUserQuestion) llegan como tool_name
-      // "AskUserQuestion" con input estructurado (question + options).
-      // Renderizamos cada opción como botón cliqueable. La elegida viaja al
-      // worker vía option_index → updated_input.
+      // SP14: AskUserQuestion trae `{questions: [{question, header, options,
+      // multiSelect}]}` — N preguntas, cada una con sus opciones. (SP9.1 leía
+      // `question`/`options` planos, que no existen en el schema real, por eso
+      // solo se veía el JSON crudo.)
       const isQuestion = String(p.tool ?? "") === "AskUserQuestion";
-      const inputFull = (p.input_full ?? {}) as {
-        question?: string;
-        options?: Array<{ label: string; description?: string; preview?: string }>;
-        header?: string;
-      };
-      const options = isQuestion && Array.isArray(inputFull.options)
-        ? inputFull.options
-        : [];
+      const questions = isQuestion ? parseQuestions(p.input_full) : [];
+      if (isQuestion && questions.length > 0) {
+        return (
+          <QuestionCard
+            id={id}
+            questions={questions}
+            outcomeTag={outcomeTag}
+            resolving={resolving}
+            onResolvePerm={onResolvePerm}
+          />
+        );
+      }
       return (
         <div className="bubble permission-request">
           <div>
@@ -777,56 +973,27 @@ function BubbleView({
             <div className="tag ok" style={{ marginTop: "0.3rem" }}>{outcomeTag}</div>
           ) : (
             <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-              {!isQuestion && (
-                <>
-                  <button
-                    className="primary"
-                    disabled={resolving}
-                    onClick={() => onResolvePerm(id, "allow")}
-                  >
-                    Permitir
-                  </button>
-                  <button
-                    disabled={resolving}
-                    onClick={() => onResolvePerm(id, "allow_always")}
-                  >
-                    Permitir siempre
-                  </button>
-                  <button
-                    className="danger"
-                    disabled={resolving}
-                    onClick={() => onResolvePerm(id, "deny")}
-                  >
-                    Denegar
-                  </button>
-                </>
-              )}
-              {isQuestion && options.length > 0 && options.map((o, i) => (
-                <button
-                  key={i}
-                  className="primary"
-                  disabled={resolving}
-                  onClick={() => onResolvePerm(id, "allow", i)}
-                  title={o.description || o.label}
-                >
-                  {o.label}
-                </button>
-              ))}
-              {isQuestion && (
-                <button
-                  className="danger"
-                  disabled={resolving}
-                  onClick={() => onResolvePerm(id, "deny")}
-                >
-                  Denegar
-                </button>
-              )}
+              <button
+                className="primary"
+                disabled={resolving}
+                onClick={() => onResolvePerm(id, "allow")}
+              >
+                Permitir
+              </button>
+              <button
+                disabled={resolving}
+                onClick={() => onResolvePerm(id, "allow_always")}
+              >
+                Permitir siempre
+              </button>
+              <button
+                className="danger"
+                disabled={resolving}
+                onClick={() => onResolvePerm(id, "deny")}
+              >
+                Denegar
+              </button>
             </div>
-          )}
-          {isQuestion && inputFull.question && (
-            <p style={{ margin: "0.3rem 0 0", fontStyle: "italic" }}>
-              {inputFull.question}
-            </p>
           )}
         </div>
       );

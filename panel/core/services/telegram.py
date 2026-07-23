@@ -94,12 +94,113 @@ def keyboard_for(request_id: str) -> dict:
     }
 
 
+# Telegram trunca el texto de un botón inline; mantenemos labels legibles.
+BUTTON_LABEL_MAX = 48
+
+
+def keyboard_for_questions(
+    request_id: str, questions: list[dict], selections: dict | None = None
+) -> dict:
+    """Teclado de AskUserQuestion (SP14): una fila por opción, con marcador de
+    estado. callback_data = 'q<qi>o<oi>:<uuid>' (5+36 = 41 bytes, bajo el
+    límite de 64 de Telegram).
+
+    Cuando todas las preguntas son single-select, elegir la última auto-envía
+    (no hace falta el botón Enviar). Si hay algún multiSelect, se añade
+    '✔️ Enviar' porque el usuario decide cuándo terminó de marcar.
+    """
+    selections = selections or {}
+    rows: list[list[dict]] = []
+    any_multi = False
+    for qi, q in enumerate(questions):
+        chosen = selections.get(str(qi), selections.get(qi)) or []
+        if isinstance(chosen, int):
+            chosen = [chosen]
+        multi = bool(q.get("multiSelect"))
+        any_multi = any_multi or multi
+        head = q.get("header") or q["question"][:24]
+        rows.append([{"text": f"— {head} —", "callback_data": f"noop:{request_id}"}])
+        for oi, opt in enumerate(q["options"]):
+            active = oi in chosen
+            if multi:
+                marker = "☑" if active else "☐"
+            else:
+                marker = "🔘" if active else "⚪"
+            label = f"{marker} {opt['label']}"[:BUTTON_LABEL_MAX]
+            rows.append([{"text": label, "callback_data": f"q{qi}o{oi}:{request_id}"}])
+    tail = []
+    if any_multi:
+        tail.append({"text": "✔️ Enviar", "callback_data": f"qs:{request_id}"})
+    tail.append({"text": "⛔ Cancelar", "callback_data": f"deny:{request_id}"})
+    rows.append(tail)
+    return {"inline_keyboard": rows}
+
+
 def parse_callback_data(data: str) -> tuple[str, str] | None:
-    """'<answer>:<uuid>' → (answer, uuid) o None si no casa."""
+    """'<answer>:<uuid>' → (answer, uuid) o None si no casa.
+
+    SP14 añade tres formas más, todas con el uuid tras ':':
+      - 'q<qi>o<oi>:<uuid>' → ('q<qi>o<oi>', uuid)  elegir opción
+      - 'qs:<uuid>'         → ('qs', uuid)          enviar respuestas
+      - 'noop:<uuid>'       → ('noop', uuid)        cabecera, no hace nada
+    """
     answer, sep, uuid = (data or "").partition(":")
-    if sep and answer in {"allow", "deny", "allow_always"} and uuid:
+    if not sep or not uuid:
+        return None
+    if answer in {"allow", "deny", "allow_always", "qs", "noop"}:
+        return answer, uuid
+    if _parse_option_token(answer) is not None:
         return answer, uuid
     return None
+
+
+def _parse_option_token(token: str) -> tuple[int, int] | None:
+    """'q<qi>o<oi>' → (qi, oi). None si no casa el patrón."""
+    if not token.startswith("q"):
+        return None
+    body = token[1:]
+    q_part, sep, o_part = body.partition("o")
+    if not sep:
+        return None
+    try:
+        return int(q_part), int(o_part)
+    except ValueError:
+        return None
+
+
+def parse_option_callback(token: str) -> tuple[int, int] | None:
+    """Público: 'q<qi>o<oi>' → (qi, oi) o None."""
+    return _parse_option_token(token)
+
+
+def format_questions(req, questions: list[dict], selections: dict | None = None) -> str:
+    """Texto del mensaje de AskUserQuestion: cabecera + cada pregunta con sus
+    opciones numeradas y lo elegido hasta ahora."""
+    selections = selections or {}
+    remaining = int((req.expires_at - timezone.now()).total_seconds())
+    remaining = max(remaining, 0)
+    mins, secs = divmod(remaining, 60)
+    parts = [f"[{req.session.project.slug}] ❓ El agente pregunta"]
+    for qi, q in enumerate(questions):
+        chosen = selections.get(str(qi), selections.get(qi)) or []
+        if isinstance(chosen, int):
+            chosen = [chosen]
+        head = q.get("header")
+        title = f"\n{qi + 1}. {q['question']}"
+        if head:
+            title = f"\n{qi + 1}. [{head}] {q['question']}"
+        if q.get("multiSelect"):
+            title += "  (varias)"
+        parts.append(title)
+        for oi, opt in enumerate(q["options"]):
+            mark = "✓" if oi in chosen else "·"
+            line = f"   {mark} {opt['label']}"
+            desc = (opt.get("description") or "").strip()
+            if desc:
+                line += f" — {desc[:120]}"
+            parts.append(line)
+    parts.append(f"\n⏳ expira en {mins}m {secs}s")
+    return "\n".join(parts)[:TG_TEXT_LIMIT]
 
 
 def format_request(req) -> str:

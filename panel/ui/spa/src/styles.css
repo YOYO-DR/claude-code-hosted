@@ -819,6 +819,121 @@ li.diff-item { padding: 0; overflow: hidden; }
   .img-modal-img[style*="scale(1)"] { transition: none; }
 }
 
+/* ============================================================
+   SP14 — AskUserQuestion: tarjeta de preguntas estilo terminal
+   ============================================================ */
+.bubble.question-card {
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--card-bg));
+  padding: 0.7rem 0.9rem;
+}
+.question-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.95em;
+}
+.question-card-icon { font-size: 1.05em; }
+
+.question-block + .question-block {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed var(--border);
+}
+.question-title-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+}
+.question-chip {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.question-text { font-weight: 600; flex: 1; min-width: 12rem; }
+.question-multi-hint { color: var(--muted); font-size: 0.8em; }
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.question-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card-bg));
+}
+.question-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card-bg));
+}
+.question-option:disabled { opacity: 0.6; cursor: default; }
+.question-marker {
+  color: var(--accent);
+  font-size: 1.05em;
+  line-height: 1.35;
+  flex-shrink: 0;
+  user-select: none;
+}
+.question-option-body { display: flex; flex-direction: column; gap: 0.15rem; }
+.question-option-label { font-weight: 600; }
+.question-option-desc {
+  color: var(--muted);
+  font-size: 0.86em;
+  line-height: 1.4;
+}
+
+.question-preview {
+  margin: 0.6rem 0 0;
+  padding: 0.6rem 0.75rem;
+  background: rgba(20, 20, 25, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.82em;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre;
+}
+@media (prefers-color-scheme: dark) {
+  .question-preview { background: rgba(255, 255, 255, 0.05); }
+}
+
+.question-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .question-option { transition: none; }
+}
+
 /* TextFileModal — reutiliza .img-modal-* (overlay, header, footer) y aporta
    solo lo específico del body: stage con scroll y <pre> monoespaciado. */
 .text-modal-stage {

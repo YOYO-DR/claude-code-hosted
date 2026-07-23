@@ -378,6 +378,20 @@ def tg_webhook(request):
         return HttpResponse(status=200)
     answer, request_id = parsed
 
+    # SP14: AskUserQuestion. `noop` son las cabeceras del teclado; `q<qi>o<oi>`
+    # marca/desmarca una opción (estado parcial en Redis) y `qs` envía. Solo
+    # `qs` (o el auto-envío al completar single-selects) resuelve el permiso.
+    if answer == "noop":
+        try:
+            tg.answer_callback_query(cq["id"])
+        except tg.TelegramError:
+            pass
+        return HttpResponse(status=200)
+
+    option = tg.parse_option_callback(answer)
+    if option is not None or answer == "qs":
+        return _tg_handle_question(cq, request_id, option)
+
     client = redis.from_url(settings.REDIS_URL)
     try:
         claimed = perm_svc.claim_answer_sync(client, request_id, answer, source="telegram")
@@ -391,6 +405,69 @@ def tg_webhook(request):
             tg.answer_callback_query(cq["id"], f"Registrado: {answer}")
         else:
             tg.answer_callback_query(cq["id"], "Ya fue respondida.")
+    except tg.TelegramError:
+        pass
+    return HttpResponse(status=200)
+
+
+def _tg_handle_question(cq: dict, request_id: str, option: tuple[int, int] | None):
+    """Tap en el teclado de AskUserQuestion.
+
+    `option` = (qi, oi) para marcar/desmarcar; None significa 'Enviar'. Se
+    auto-envía cuando todas las preguntas son single-select y ya están todas
+    respondidas — así el caso común (una pregunta, una opción) es un solo tap.
+    """
+    from panel.core.models import PermissionRequest
+    from panel.core.services import questions as q_svc
+    from panel.core.services import tg_notify
+
+    req = PermissionRequest.objects.filter(id=request_id).first()
+    if req is None:
+        return HttpResponse(status=200)
+    questions = q_svc.parse_questions(req.input_full)
+    if not questions:
+        return HttpResponse(status=200)
+
+    selections = tg_notify.read_selections(request_id)
+    if option is not None:
+        selections = tg_notify.toggle_selection(questions, selections, *option)
+        tg_notify.write_selections(request_id, selections)
+
+    complete = q_svc.is_complete(questions, selections)
+    any_multi = any(q.get("multiSelect") for q in questions)
+    # Enviar explícito, o auto-envío si ya está todo y no hay multiSelect
+    # (con multiSelect el usuario debe poder seguir marcando).
+    should_submit = option is None or (complete and not any_multi)
+
+    if not should_submit:
+        tg_notify.refresh_question_message(request_id, selections)
+        try:
+            tg.answer_callback_query(cq["id"])
+        except tg.TelegramError:
+            pass
+        return HttpResponse(status=200)
+
+    if not complete:
+        try:
+            tg.answer_callback_query(cq["id"], "Falta responder alguna pregunta.")
+        except tg.TelegramError:
+            pass
+        return HttpResponse(status=200)
+
+    client = redis.from_url(settings.REDIS_URL)
+    try:
+        claimed = perm_svc.claim_answer_sync(
+            client, request_id, "allow", source="telegram", selections=selections
+        )
+    except (redis.RedisError, ValueError):
+        claimed = False
+    finally:
+        client.close()
+
+    try:
+        tg.answer_callback_query(
+            cq["id"], "Respuesta enviada." if claimed else "Ya fue respondida."
+        )
     except tg.TelegramError:
         pass
     return HttpResponse(status=200)

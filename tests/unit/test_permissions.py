@@ -182,16 +182,23 @@ def test_claim_encodes_source():
     client = fakeredis.FakeStrictRedis(server=fakeredis.FakeServer())
     perm_svc.claim_answer_sync(client, "rid", "allow", source="telegram")
     assert client.get(bus.key_answer("rid")) == b"allow|telegram"
-    # SP9.1: _split_answer devuelve ahora (answer, source, option_index).
-    assert perm_svc._split_answer("allow|telegram") == ("allow", "telegram", None)
-    assert perm_svc._split_answer("allow") == ("allow", "web", None)  # legacy
-    # SP9.1: con option_index del AskUserQuestion.
-    assert perm_svc._split_answer("allow|web|opt:2") == ("allow", "web", 2)
+    # SP14: _split_answer devuelve (answer, source, option_index, selections).
+    assert perm_svc._split_answer("allow|telegram") == ("allow", "telegram", None, None)
+    assert perm_svc._split_answer("allow") == ("allow", "web", None, None)  # legacy
+    # SP9.1: con option_index del AskUserQuestion (legacy, sigue soportado).
+    assert perm_svc._split_answer("allow|web|opt:2") == ("allow", "web", 2, None)
     # SP9.1: option_index con source no-default.
     perm_svc.claim_answer_sync(client, "rid2", "allow", source="telegram", option_index=1)
     raw = client.get(bus.key_answer("rid2")).decode()
     assert raw == "allow|telegram|opt:1"
-    assert perm_svc._split_answer(raw) == ("allow", "telegram", 1)
+    # SP14: selections gana sobre option_index y viaja en base64url.
+    perm_svc.claim_answer_sync(
+        client, "rid3", "allow", source="web", selections={"0": [1], "1": [0, 2]}
+    )
+    raw3 = client.get(bus.key_answer("rid3")).decode()
+    assert raw3.startswith("allow|web|sel:")
+    assert perm_svc._split_answer(raw3)[3] == {"0": [1], "1": [0, 2]}
+    assert perm_svc._split_answer(raw) == ("allow", "telegram", 1, None)
 
 
 def test_apply_answer_idempotent(monkeypatch):
